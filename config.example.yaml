@@ -1,0 +1,32 @@
+server:
+  host: "0.0.0.0"
+  port: 1880
+  log_level: "INFO"
+
+zendure:
+  timeout_seconds: 5
+  cache_ttl_seconds: 60
+  devices:
+    - name: "zendure1"
+      host: "192.168.x.x"
+    - name: "zendure2"
+      host: "192.168.x.y"
+    - name: "zendure3"
+      host: ""
+    - name: "zendure4"
+      host: ""
+
+proxy:
+  language: "EN"
+  solar_power_info: false
+  single_mode_upperlimit_percent: 100
+  single_mode_lowerlimit_percent: 40
+  single_mode_change_device_diff: 5
+  single_mode_delayed_standby_timer: 300
+  dualmode_damper_enable: false
+  dualmode_damper_timer: 120
+  dualmode_damper_amount: 200
+  balancing_factor: 5
+  always_dual_mode: false
+  equal_mode: false
+

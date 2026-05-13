@@ -1,0 +1,13 @@
+services:
+  zendure-proxy:
+    build: .
+    container_name: zendure-zensdk-proxy
+    restart: unless-stopped
+    ports:
+      - "1880:1880"
+    environment:
+      CONFIG_PATH: /app/config.yaml
+      LOG_LEVEL: INFO
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+
