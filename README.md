@@ -31,13 +31,13 @@ De AppDaemon entry point is `apps/zendure_proxy/app.py`.
 
 De AppDaemon class is `ZendureProxy`.
 
-De AppDaemon module naam is `zendure_proxy`.
+De AppDaemon module naam is `zendure_proxy.app`.
 
 Volledige configuratie:
 
 ```yaml
 zendure_proxy:
-  module: zendure_proxy
+  module: zendure_proxy.app
   class: ZendureProxy
 
   ip_zendure_1: "192.168.1.101"

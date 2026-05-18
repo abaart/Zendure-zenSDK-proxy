@@ -1,5 +1,5 @@
 zendure_proxy:
-  module: zendure_proxy
+  module: zendure_proxy.app
   class: ZendureProxy
 
   # ── Required: IP addresses of your Zendure devices ────────────────────────
