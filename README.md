@@ -1,5 +1,74 @@
 # Zendure-zenSDK-proxy
 
+## AppDaemon via HACS
+
+Deze branch bevat naast de Node-RED flow ook een AppDaemon versie van de proxy.
+
+HACS installeert de AppDaemon code uit `apps/zendure_proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `apps/apps.yaml` toe aan je AppDaemon `apps.yaml`.
+
+### Installatie
+
+1. Installeer en start AppDaemon in Home Assistant.
+2. Open HACS.
+3. Open de HACS configuratie-opties.
+4. Zet `Enable AppDaemon apps discovery & tracking` aan.
+5. Ga naar `Custom repositories`.
+6. Voeg deze GitHub repository toe als type `AppDaemon`.
+7. Installeer `Zendure zenSDK Proxy`.
+8. Open je AppDaemon `apps.yaml`.
+9. Kopieer de `zendure_proxy` configuratie uit [`apps/apps.yaml`](apps/apps.yaml) naar je AppDaemon `apps.yaml`.
+10. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
+11. Herstart AppDaemon.
+12. Vul in Gielz bij `Zendure 2400 AC IP-adres` het AppDaemon proxy adres in, bijvoorbeeld `homeassistant.local:8120/endpoint`.
+
+HACS downloadt de AppDaemon code naar de Home Assistant configuratiemap onder `appdaemon/apps/`.
+
+Als AppDaemon en Home Assistant in dezelfde add-on of container network namespace draaien, gebruik dan `localhost:8120/endpoint`. Als AppDaemon in een aparte container draait, gebruik dan het IP-adres of de hostnaam waarop Home Assistant de AppDaemon poort kan bereiken.
+
+### AppDaemon configuratie
+
+De AppDaemon entry point is `apps/zendure_proxy/app.py`.
+
+De AppDaemon class is `ZendureProxy`.
+
+De AppDaemon module naam is `zendure_proxy`.
+
+Minimale configuratie:
+
+```yaml
+zendure_proxy:
+  module: zendure_proxy
+  class: ZendureProxy
+  ip_zendure_1: "192.168.1.101"
+  ip_zendure_2: "192.168.1.102"
+  ip_zendure_3: ""
+  server_host: "0.0.0.0"
+  server_port: 8120
+```
+
+De proxy luistert daarna op:
+
+```text
+http://<appdaemon-host>:8120/properties/report
+http://<appdaemon-host>:8120/properties/write
+http://<appdaemon-host>:8120/endpoint/properties/report
+http://<appdaemon-host>:8120/endpoint/properties/write
+```
+
+Gebruik in Gielz meestal:
+
+```text
+<appdaemon-host>:8120/endpoint
+```
+
+### Release naar HACS
+
+Voor testen als custom repository is een GitHub release niet verplicht. HACS leest zonder release de default branch.
+
+Voor een nette gebruikerservaring maak je wel een GitHub release. HACS toont dan de laatste releases als updatekeuzes.
+
+Controleer vóór een release dat de GitHub Action `Validate HACS` groen is.
+
 
 De [Gielz-automatisering](https://github.com/Gielz1986/Zendure-HA-zenSDK) voor Zendure werkt goed om een Zendure thuisbatterij (die de ZenSDK API ondersteunt) lokaal te bedienen via Home Assistant. Hierdoor is de batterij niet meer afhankelijk van een verbinding met de cloud.
 
