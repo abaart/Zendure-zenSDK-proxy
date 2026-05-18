@@ -33,18 +33,44 @@ De AppDaemon class is `ZendureProxy`.
 
 De AppDaemon module naam is `zendure_proxy`.
 
-Minimale configuratie:
+Volledige configuratie:
 
 ```yaml
 zendure_proxy:
   module: zendure_proxy
   class: ZendureProxy
+
   ip_zendure_1: "192.168.1.101"
   ip_zendure_2: "192.168.1.102"
   ip_zendure_3: ""
+
   server_host: "0.0.0.0"
   server_port: 8120
+
+  single_mode_upperlimit_percent: 100
+  single_mode_lowerlimit_percent: 40
+  single_mode_change_device_diff: 5
+
+  single_mode_delayed_standby_timer: 300
+  single_mode_standby_charging_enable: true
+  single_mode_standby_discharging_enable: true
+
+  singlemode_transition_timer: 40
+
+  balancing_factor: 5
+
+  dualmode_damper_enable: false
+  dualmode_damper_timer: 120
+  dualmode_damper_amount: 200
+
+  always_dual_mode: false
+  equal_mode: false
+
+  solar_power_info: false
+  manual_mode_repeat: true
 ```
+
+Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`apps/apps.yaml`](apps/apps.yaml).
 
 De proxy luistert daarna op:
 
