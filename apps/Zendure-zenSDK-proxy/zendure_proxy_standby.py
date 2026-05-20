@@ -147,7 +147,7 @@ def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
             state.devices[eligible[0]].electric_level
             - state.devices[eligible[1]].electric_level
         )
-        < cfg.device_change_diff
+        == cfg.device_change_diff
     )
     direction_enabled = (
         (state.latest_power_cmd > 0 and cfg.standby_charging)
