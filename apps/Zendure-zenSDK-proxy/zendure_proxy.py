@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import inspect
 import json
 import math
@@ -27,7 +28,7 @@ import appdaemon.plugins.hass.hassapi as hass
 
 from zendure_proxy_config import Config, load_config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_get_handler import execute_get
+from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors
 from zendure_proxy_logging import ProxyFileLogger, render_log_dashboard
 from zendure_proxy_metrics import MetricsRegistry, render_metrics_dashboard
@@ -82,6 +83,10 @@ class ZendureProxy(hass.Hass):
             self._metrics_route_handle = await self.register_route(
                 self._metrics_dashboard, self._cfg.metrics_dashboard_route
             )
+        if self._cfg.diagnostics_dashboard_enabled:
+            self._diagnostics_route_handle = await self.register_route(
+                self._diagnostics_dashboard, self._cfg.diagnostics_dashboard_route
+            )
         if self._cfg.metrics_enabled and self._cfg.metrics_ha_sensors_enabled:
             self._metrics_sensor_timer = await self.run_every(
                 self._publish_metrics_sensors,
@@ -108,6 +113,8 @@ class ZendureProxy(hass.Hass):
     async def terminate(self) -> None:
         if getattr(self, "_metrics_sensor_timer", None):
             await self.cancel_timer(self._metrics_sensor_timer, silent=True)
+        if getattr(self, "_diagnostics_route_handle", None):
+            await self.deregister_route(self._diagnostics_route_handle)
         if getattr(self, "_metrics_route_handle", None):
             await self.deregister_route(self._metrics_route_handle)
         if getattr(self, "_logs_route_handle", None):
@@ -151,6 +158,26 @@ class ZendureProxy(hass.Hass):
         self.log(message, level=level, **kwargs)
         if self._file_logger is not None:
             self._file_logger.log(message, level)
+
+    def _debug_capture_payload(
+        self,
+        message_type: str,
+        direction: str,
+        payload: dict,
+    ) -> None:
+        if not self._cfg.debug_payload_capture_enabled:
+            return
+        captured = {
+            "debug_message_type": message_type,
+            "debug_direction": direction,
+            "debug_timestamp": int(time.time()),
+            "debug_payload": payload,
+        }
+        line = json.dumps(captured, ensure_ascii=False, sort_keys=True)
+        if self._file_logger is not None:
+            self._file_logger.log(line, "DEBUG")
+        else:
+            self.log(line, level="DEBUG")
 
     def _get_mqtt_api(self):
         if not self._cfg.proxy_ha_sensors_mqtt_discovery_enabled:
@@ -199,6 +226,176 @@ class ZendureProxy(hass.Hass):
             self._cfg.metrics_dashboard_refresh,
         )
         return aiohttp.web.Response(text=html, content_type="text/html")
+
+    async def _diagnostics_dashboard(
+        self, request: aiohttp.web.Request, _kwargs
+    ) -> aiohttp.web.Response:
+        if request.query.get("reset") == "1":
+            self._reset_node_red_counters()
+        self._log_diagnostics_warnings()
+        page = self._render_diagnostics_dashboard()
+        return aiohttp.web.Response(text=page, content_type="text/html")
+
+    def _render_diagnostics_dashboard(self) -> str:
+        snapshot = self._diagnostics_snapshot()
+        warnings = self._diagnostics_warnings()
+        warning_rows = "".join(
+            f"<tr><td>{html.escape(text)}</td></tr>" for text in warnings
+        ) or "<tr><td>No active warnings</td></tr>"
+        counter_rows = "".join(
+            f"<tr><td>{html.escape(name)}</td><td>{value}</td></tr>"
+            for name, value in snapshot["counters"].items()
+        )
+        device_rows = "".join(
+            "<tr>"
+            f"<td>{device['idx']}</td>"
+            f"<td>{html.escape(device['sn'])}</td>"
+            f"<td>{html.escape(device['ip'])}</td>"
+            f"<td>{device['electric_level']}</td>"
+            f"<td>{device['soc_limit']}</td>"
+            f"<td>{device['latest_power_cmd']}</td>"
+            f"<td>{device['missing_replies']}</td>"
+            "</tr>"
+            for device in snapshot["devices"]
+        )
+        reset_href = f"/app/{html.escape(self._cfg.diagnostics_dashboard_route)}?reset=1"
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Zendure proxy diagnostics</title>
+  <style>
+    body {{ margin: 0; font-family: system-ui, sans-serif; background: #111827; color: #e5e7eb; }}
+    header {{ padding: 16px 20px; border-bottom: 1px solid #374151; background: #0f172a; }}
+    h1 {{ margin: 0; font-size: 18px; }}
+    main {{ padding: 16px 20px; display: grid; gap: 16px; }}
+    section {{ border: 1px solid #374151; border-radius: 8px; overflow: hidden; background: #020617; }}
+    h2 {{ margin: 0; padding: 12px 14px; font-size: 15px; background: #1f2937; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+    th, td {{ padding: 9px 12px; border-top: 1px solid #1f2937; text-align: right; }}
+    th:first-child, td:first-child {{ text-align: left; }}
+    th {{ color: #93c5fd; font-weight: 650; }}
+    a {{ color: #bfdbfe; }}
+  </style>
+</head>
+<body>
+  <header><h1>Zendure proxy diagnostics</h1></header>
+  <main>
+    <section>
+      <h2>Proxy Info</h2>
+      <table>
+        <tr><th>Field</th><th>Value</th></tr>
+        <tr><td>Version</td><td>{html.escape(PROXY_VERSION)}</td></tr>
+        <tr><td>Device count</td><td>{snapshot['proxy']['device_count']}</td></tr>
+        <tr><td>Active indices</td><td>{html.escape(str(snapshot['proxy']['devices_active_idx']))}</td></tr>
+        <tr><td>Active count</td><td>{snapshot['proxy']['device_active_count']}</td></tr>
+        <tr><td>latestPowerCmd</td><td>{snapshot['proxy']['latest_power_cmd']}</td></tr>
+      </table>
+    </section>
+    <section>
+      <h2>Node-RED Counters</h2>
+      <table><tr><th>Counter</th><th>Value</th></tr>{counter_rows}</table>
+      <p style="padding:0 12px 12px;margin:0;"><a href="{reset_href}">Reset counters to zero</a></p>
+    </section>
+    <section>
+      <h2>Active Warnings</h2>
+      <table><tr><th>Warning</th></tr>{warning_rows}</table>
+    </section>
+    <section>
+      <h2>Devices</h2>
+      <table>
+        <tr><th>Device</th><th>SN</th><th>IP</th><th>SoC</th><th>socLimit</th><th>latestPowerCmd</th><th>Missing GET</th></tr>
+        {device_rows}
+      </table>
+    </section>
+  </main>
+</body>
+</html>"""
+
+    def _diagnostics_snapshot(self) -> dict[str, Any]:
+        state = self._state
+        return {
+            "proxy": {
+                "device_count": state.device_count,
+                "devices_active_idx": state.devices_active_idx,
+                "device_active_count": state.device_active_count,
+                "latest_power_cmd": state.latest_power_cmd,
+            },
+            "counters": {
+                "GET received": state.counter_get_received,
+                "GET replies sent": state.counter_get_replies,
+                "GET timeout": state.counter_get_timeouts,
+                "Config drop": state.counter_config_drop,
+                "Serial missing drop": state.counter_serial_missing_drop,
+                "POST received": state.counter_post_received,
+            },
+            "devices": [
+                {
+                    "idx": idx + 1,
+                    "sn": device.sn,
+                    "ip": device.ip,
+                    "electric_level": device.electric_level,
+                    "soc_limit": device.soc_limit,
+                    "latest_power_cmd": device.latest_power_cmd,
+                    "missing_replies": (
+                        state.counter_missing[idx]
+                        if idx < len(state.counter_missing)
+                        else 0
+                    ),
+                }
+                for idx, device in enumerate(state.devices)
+            ],
+        }
+
+    def _diagnostics_warnings(self) -> list[str]:
+        state = self._state
+        warnings: list[str] = []
+        devices = state.devices
+        for attr, label in (
+            ("charge_max_limit", "chargeMaxLimit"),
+            ("inverse_max_power", "inverseMaxPower"),
+        ):
+            values = [getattr(device, attr) for device in devices]
+            if values and len(set(values)) > 1:
+                warnings.append(f"{label} differs between devices: {values}")
+
+        min_soc_values = []
+        soc_set_values = []
+        for device in devices:
+            response = device.last_response or {}
+            props = response.get("properties", {})
+            if "minSoc" in props:
+                min_soc_values.append(props["minSoc"])
+            if "socSet" in props:
+                soc_set_values.append(props["socSet"])
+        if min_soc_values and len(set(min_soc_values)) > 1:
+            warnings.append(f"minSoc differs between devices: {min_soc_values}")
+        if soc_set_values and len(set(soc_set_values)) > 1:
+            warnings.append(f"socSet differs between devices: {soc_set_values}")
+
+        if state.latest_get_ts <= 0 or now() - state.latest_get_ts > 10:
+            warnings.append("No recent GET within 10 seconds")
+        return warnings
+
+    def _log_diagnostics_warnings(self) -> None:
+        logged = getattr(self, "_diagnostics_logged_warnings", set())
+        for warning in self._diagnostics_warnings():
+            if warning in logged:
+                continue
+            self._proxy_log(f"Diagnostics warning: {warning}", level="WARNING")
+            logged.add(warning)
+        self._diagnostics_logged_warnings = logged
+
+    def _reset_node_red_counters(self) -> None:
+        self._state.counter_get_received = 0
+        self._state.counter_get_replies = 0
+        self._state.counter_get_timeouts = 0
+        self._state.counter_config_drop = 0
+        self._state.counter_serial_missing_drop = 0
+        self._state.counter_post_received = 0
+        self._state.counter_post_replies = 0
+        self._state.counter_missing = [0, 0, 0]
 
     async def _publish_metrics_sensors(self, _kwargs=None) -> None:
         if not self._cfg.metrics_enabled or not self._cfg.metrics_ha_sensors_enabled:
@@ -444,11 +641,13 @@ class ZendureProxy(hass.Hass):
         try:
             if not self._cfg.device_ips:
                 status = 503
+                self._state.counter_config_drop += 1
                 return {"error": "No devices configured"}, status
 
             if not all(d.sn for d in self._state.devices):
                 await self._ensure_serial_numbers()
             if not all(d.sn for d in self._state.devices):
+                self._state.counter_serial_missing_drop += 1
                 if self._state.last_get_response:
                     status = 200
                     await self._publish_proxy_ha_sensors(self._state.last_get_response)
@@ -462,16 +661,24 @@ class ZendureProxy(hass.Hass):
                 data = await asyncio.wait_for(fut, timeout=30.0)
                 self._state.counter_get_replies += 1
                 status = 200
+                self._mark_passive_zero_timestamps()
                 await self._publish_proxy_ha_sensors(data)
+                self._debug_capture_payload("GET", "To Home Assistant", data)
                 return data, status
             except asyncio.TimeoutError:
                 timeout = True
+                self._state.counter_get_timeouts += 1
                 if self._state.last_get_response:
                     status = 200
                     await self._publish_proxy_ha_sensors(self._state.last_get_response)
                     return self._state.last_get_response, status
                 status = 504
                 return {"error": "Upstream timeout"}, status
+            except GatewayTimeoutError:
+                timeout = True
+                self._state.counter_get_timeouts += 1
+                status = 504
+                return {"error": "Gateway Timeout"}, status
             except Exception as exc:
                 self._proxy_log(f"GET handler error: {exc}", level="ERROR")
                 if self._state.last_get_response:
@@ -491,6 +698,7 @@ class ZendureProxy(hass.Hass):
         status = 500
         timeout = False
         self._state.counter_post_received += 1
+        self._debug_capture_payload("POST", "From Home Assistant", payload)
 
         try:
             if not self._cfg.device_ips:
@@ -503,6 +711,7 @@ class ZendureProxy(hass.Hass):
                 data = await asyncio.wait_for(fut, timeout=30.0)
                 self._state.counter_post_replies += 1
                 status = 200
+                self._debug_capture_payload("POST", "To Home Assistant", data)
                 return data, status
             except asyncio.TimeoutError:
                 timeout = True
@@ -520,6 +729,17 @@ class ZendureProxy(hass.Hass):
     async def _record_incoming_depths(self) -> None:
         get_depth, post_depth = await self._queue.depths()
         self._metrics.set_incoming_queue_depth(get_depth, post_depth)
+
+    def _mark_passive_zero_timestamps(self) -> None:
+        stamp = now()
+        active = set(self._state.devices_active_idx)
+        for idx, device in enumerate(self._state.devices):
+            if (
+                idx not in active
+                and device.latest_power_cmd == 0
+                and device.latest_power_cmd_zero_ts <= 0
+            ):
+                device.latest_power_cmd_zero_ts = stamp
 
     # ── Queue processor ────────────────────────────────────────────────────────
 
@@ -576,7 +796,10 @@ class ZendureProxy(hass.Hass):
                         cached = self._state.last_get_response
                         for fut in gets:
                             if not fut.done():
-                                if cached:
+                                if (
+                                    cached
+                                    and not isinstance(exc, GatewayTimeoutError)
+                                ):
                                     fut.set_result(cached)
                                 else:
                                     fut.set_exception(exc)

@@ -44,11 +44,19 @@ async def execute_post(
         key: value for key, value in props.items()
         if key not in _RUNTIME_MODE_KEYS
     }
+    power_keys_present = _POWER_KEYS & set(device_props.keys())
+    power_value_keys_present = {"inputLimit", "outputLimit"} & set(device_props.keys())
 
     # ── Non-power properties: forward to all devices ──────────────────────────
-    if not (_POWER_KEYS & set(device_props.keys())):
+    if not power_value_keys_present:
         if not device_props:
-            return {"ack": "pong"}
+            runtime_payload = {"properties": {
+                key: props[key] for key in props if key in _RUNTIME_MODE_KEYS
+            }}
+            return runtime_payload if runtime_payload["properties"] else {"ack": "pong"}
+
+        if power_keys_present == {"acMode"}:
+            state.ac_mode = _int(device_props["acMode"])
 
         outbound_props = dict(device_props)
 
@@ -81,7 +89,18 @@ async def execute_post(
             )
             responses.append(await client.post(dp))
 
-        return responses[0] if responses else {"ack": "pong"}
+        if _int(outbound_props.get("smartMode", -1), -1) == 1:
+            passive = set(range(n)) - set(state.devices_active_idx)
+            stamp = now()
+            for idx in passive:
+                if (
+                    0 <= idx < len(devs)
+                    and devs[idx].smart_mode == 0
+                    and not devs[idx].standby_device
+                ):
+                    devs[idx].latest_power_cmd_zero_ts = stamp
+
+        return responses if responses else {"ack": "pong"}
 
     # ── Power command ─────────────────────────────────────────────────────────
     now_ts = now()
@@ -125,19 +144,45 @@ async def execute_post(
         )
 
     # ── How many devices active? ──────────────────────────────────────────────
+    previous_active_count = state.device_active_count
     if not invalid_direction:
         state.device_active_count = calc_active_count(
-            state, ac_mode, distribution_power, upper, lower, force_all
+            state, ac_mode, distribution_power, upper, lower, force_all,
+            cfg.device_change_diff,
         )
 
     # ── Which specific devices are active? ────────────────────────────────────
     prev_active_device = state.single_mode_active_device
+    prev_active_idx = list(state.devices_active_idx)
     if not invalid_direction:
         _select_active_devices(state, ac_mode, cfg)
 
-    if state.device_active_count == 1 and state.single_mode_active_device != prev_active_device:
+    if (
+        state.device_active_count > 1
+        and previous_active_count == 1
+        and state.single_to_dual_transition_start_ts <= 0
+        and state.forced_dual_transition_start_ts <= 0
+        and any(dev.latest_power_cmd != 0 for dev in devs)
+    ):
+        state.single_to_dual_transition_start_ts = now_ts
+        state.single_to_dual_transition_original_device = prev_active_device
+
+    if (
+        state.device_active_count == 1
+        and state.single_mode_active_device != prev_active_device
+        and not (
+            (ac_mode == 1 and any(dev.soc_limit == 1 for dev in devs))
+            or (ac_mode == 2 and any(dev.soc_limit == 2 for dev in devs))
+        )
+    ):
         state.transition_start_ts = now_ts
         state.transition_original_device = prev_active_device
+        state.forced_dual_transition_start_ts = now_ts
+        state.forced_dual_transition_original_device = prev_active_device
+        state.device_active_count = min(2, n)
+        state.devices_active_idx = sorted(
+            {prev_active_device, state.single_mode_active_device}
+        )
 
     # ── Per-device power distribution ─────────────────────────────────────────
     if invalid_direction:
@@ -152,12 +197,12 @@ async def execute_post(
     tasks = []
     for i, client in enumerate(clients):
         pwr = per_device[i]
-        if ac_mode == 1:
-            dp = {"acMode": 1, "inputLimit": pwr}
-        elif ac_mode == 2:
-            dp = {"acMode": 2, "outputLimit": pwr}
-        else:
-            dp = {"inputLimit": 0, "outputLimit": 0}
+        dp = _power_payload_for_device(
+            props,
+            ac_mode,
+            pwr,
+            invalid_direction,
+        )
         for k, v in props.items():
             if k not in _POWER_KEYS:
                 dp[k] = v
@@ -169,6 +214,15 @@ async def execute_post(
         devs[i].latest_power_cmd = _signed_power_cmd(ac_mode, pwr)
         if pwr == 0:
             devs[i].latest_power_cmd_zero_ts = now_ts
+
+    removed_active = set(prev_active_idx) - set(state.devices_active_idx)
+    added_active = set(state.devices_active_idx) - set(prev_active_idx)
+    for idx in removed_active:
+        if 0 <= idx < len(devs):
+            devs[idx].latest_power_cmd_zero_ts = now_ts
+    for idx in added_active:
+        if 0 <= idx < len(devs):
+            devs[idx].latest_power_cmd_zero_ts = 0.0
 
     responses = await asyncio.gather(*tasks) if tasks else []
 
@@ -188,7 +242,7 @@ async def execute_post(
         manage_standby(state, clients, ac_mode, per_device, cfg, logger)
     )
 
-    return responses[0] if responses else {"ack": "pong"}
+    return responses if responses else {"ack": "pong"}
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -215,6 +269,37 @@ def _apply_runtime_mode_props(props: dict, state: ProxyState) -> None:
         state.always_dual_mode = bool(_int(props["alwaysDualMode"]))
     if "dualModeDamper" in props:
         state.dualmode_damper_enabled = bool(_int(props["dualModeDamper"]))
+
+
+def _power_payload_for_device(
+    props: dict,
+    ac_mode: int,
+    pwr: int,
+    invalid_direction: bool,
+) -> dict:
+    dp: dict = {}
+    if "acMode" in props:
+        dp["acMode"] = ac_mode
+
+    if invalid_direction:
+        for key in ("inputLimit", "outputLimit"):
+            if key in props:
+                dp[key] = 0
+        return dp
+
+    if "inputLimit" in props:
+        dp["inputLimit"] = pwr if ac_mode == 1 else 0
+    elif ac_mode == 1:
+        dp["inputLimit"] = pwr
+
+    if "outputLimit" in props:
+        dp["outputLimit"] = pwr if ac_mode == 2 else 0
+    elif ac_mode == 2:
+        dp["outputLimit"] = pwr
+
+    if not dp:
+        dp = {"inputLimit": 0, "outputLimit": 0}
+    return dp
 
 
 def _apply_single_mode_damper(
@@ -280,8 +365,11 @@ def _select_active_devices(state: ProxyState, ac_mode: int, cfg: Config) -> None
         diff_threshold = 1
 
     if active_count >= n:
+        state.devices_active_idx_previous = list(state.devices_active_idx)
         state.devices_active_idx = list(range(n))
         return
+
+    previous = list(state.devices_active_idx)
 
     # Rank by SoC: lowest first for charging, highest first for discharging
     ranked = sorted(
@@ -291,13 +379,35 @@ def _select_active_devices(state: ProxyState, ac_mode: int, cfg: Config) -> None
     )
 
     if active_count == 1:
-        best = ranked[0]
-        current = state.single_mode_active_device
-        if abs(devs[best].electric_level - devs[current].electric_level) >= diff_threshold:
+        if n == 2 and ac_mode == 1 and sum(d.soc_limit == 1 for d in devs[:2]) == 1:
+            best = 0 if devs[0].soc_limit != 1 else 1
             state.single_mode_active_device = best
+        elif n == 2 and ac_mode == 2 and sum(d.soc_limit == 2 for d in devs[:2]) == 1:
+            best = 0 if devs[0].soc_limit != 2 else 1
+            state.single_mode_active_device = best
+        else:
+            best = ranked[0]
+            current = state.single_mode_active_device
+            if abs(devs[best].electric_level - devs[current].electric_level) >= diff_threshold:
+                state.single_mode_active_device = best
         state.devices_active_idx = [state.single_mode_active_device]
     else:
-        state.devices_active_idx = ranked[:active_count]
+        if n == 3:
+            soc_values = [dev.electric_level for dev in devs]
+            soc_diff = max(soc_values) - min(soc_values)
+            should_reselect = (
+                soc_diff >= diff_threshold
+                or active_count != len(previous)
+                or n != len(devs)
+                or len(previous) != active_count
+            )
+            if should_reselect:
+                state.devices_active_idx = ranked[:active_count]
+            elif previous:
+                state.devices_active_idx = previous
+        else:
+            state.devices_active_idx = ranked[:active_count]
+    state.devices_active_idx_previous = previous
 
 
 def _calc_per_device_power(

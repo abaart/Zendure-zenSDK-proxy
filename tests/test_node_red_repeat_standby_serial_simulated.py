@@ -5,7 +5,9 @@ import asyncio
 from zendure_proxy import ZendureProxy, should_repeat_last_power
 from zendure_proxy_config import Config, is_placeholder_device_ip, load_config
 from zendure_proxy_device_client import build_device_url
-from zendure_proxy_standby import _delayed_standby
+from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
+from zendure_proxy_power import now
+from zendure_proxy_standby import _delayed_standby, manage_standby
 from zendure_proxy_state import DeviceState, ProxyState
 
 from conftest import FakeDeviceClient, device_response
@@ -91,6 +93,96 @@ def test_delayed_standby_posts_smartmode_and_zero_power_properties() -> None:
     assert state.devices[1].standby_device is True
 
 
+def test_delayed_standby_skips_duplicate_zero_timestamp() -> None:
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", smart_mode=1),
+            DeviceState(ip="ip2", sn="SN2", smart_mode=1, latest_power_cmd_zero_ts=123),
+        ],
+    )
+    state.devices_active_idx = [0]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(_delayed_standby(1, state, clients, 0, lambda *args, **kwargs: None))
+    state.devices[1].standby_task = None
+    asyncio.run(_delayed_standby(1, state, clients, 0, lambda *args, **kwargs: None))
+
+    assert clients[1].post_payloads == [
+        {"sn": "SN2", "properties": STANDBY_POST_PROPERTIES}
+    ]
+
+
+def test_manage_standby_blocks_node_red_guard_conditions() -> None:
+    cfg = Config(device_ips=["ip1", "ip2"], standby_timer=300)
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", electric_level=50),
+            DeviceState(ip="ip2", sn="SN2", electric_level=52, latest_power_cmd_zero_ts=10),
+        ],
+        device_active_count=1,
+        devices_active_idx=[0],
+        latest_power_cmd=500,
+        latest_get_ts=now(),
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        manage_standby(
+            state,
+            clients,
+            1,
+            [500, 0],
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    assert state.devices[1].standby_task is None
+
+    state.devices[1].electric_level = 80
+    state.transition_start_ts = now()
+    asyncio.run(
+        manage_standby(
+            state,
+            clients,
+            1,
+            [500, 0],
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    assert state.devices[1].standby_task is None
+
+    state.transition_start_ts = 0
+    state.latest_get_ts = now() - 11
+    asyncio.run(
+        manage_standby(
+            state,
+            clients,
+            1,
+            [500, 0],
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    assert state.devices[1].standby_task is None
+
+    state.latest_get_ts = now()
+    state.latest_power_cmd = 0
+    asyncio.run(
+        manage_standby(
+            state,
+            clients,
+            1,
+            [0, 0],
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    assert state.devices[1].standby_task is None
+
+
 def test_serial_retry_populates_missing_serial_numbers() -> None:
     proxy = ZendureProxy.__new__(ZendureProxy)
     proxy._clients = [
@@ -125,6 +217,59 @@ def test_report_request_retries_missing_serials_before_returning_503() -> None:
     assert client.get_calls == 1
 
 
+def test_execute_get_raises_gateway_timeout_when_strict_compat_is_enabled() -> None:
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1"),
+            DeviceState(ip="ip2", sn="SN2"),
+        ],
+        last_get_response={"cached": True},
+    )
+    clients = [FakeDeviceClient(device_response(1, "SN1")), FakeDeviceClient(None)]
+
+    try:
+        asyncio.run(
+            execute_get(
+                clients,
+                state,
+                Config(
+                    device_ips=["ip1", "ip2"],
+                    node_red_compat_strict_get_errors=True,
+                ),
+                lambda *args, **kwargs: None,
+            )
+        )
+    except GatewayTimeoutError as exc:
+        assert str(exc) == "Gateway Timeout"
+    else:
+        raise AssertionError("GatewayTimeoutError was not raised")
+
+
+def test_report_request_returns_gateway_timeout_for_strict_get_error() -> None:
+    proxy = ZendureProxy.__new__(ZendureProxy)
+    proxy._cfg = Config(
+        device_ips=["ip1"],
+        node_red_compat_strict_get_errors=True,
+    )
+    proxy._clients = [FakeDeviceClient(device_response(1, "SN1"))]
+    proxy._state = ProxyState(
+        device_count=1,
+        devices=[DeviceState(ip="ip1", sn="SN1")],
+    )
+    proxy._metrics = _FakeMetrics()
+    proxy._queue = _GatewayTimeoutQueue()
+    proxy._proxy_log = lambda *args, **kwargs: None
+    proxy._publish_proxy_ha_sensors = _noop_publish
+    proxy._record_incoming_depths = _noop_record_depths
+    proxy._debug_capture_payload = lambda *args, **kwargs: None
+
+    data, status = asyncio.run(proxy._execute_report_request())
+
+    assert status == 504
+    assert data == {"error": "Gateway Timeout"}
+
+
 def test_simulated_device_urls_and_placeholder_ips_are_compatible_with_node_red() -> None:
     assert build_device_url(
         "testdevice1",
@@ -146,6 +291,17 @@ def test_simulated_device_urls_and_placeholder_ips_are_compatible_with_node_red(
 
 async def _noop_publish(_response: dict) -> None:
     return None
+
+
+async def _noop_record_depths() -> None:
+    return None
+
+
+class _GatewayTimeoutQueue:
+    async def enqueue_get(self):
+        future = asyncio.get_event_loop().create_future()
+        future.set_exception(GatewayTimeoutError("Gateway Timeout"))
+        return future
 
 
 class _FakeMetrics:

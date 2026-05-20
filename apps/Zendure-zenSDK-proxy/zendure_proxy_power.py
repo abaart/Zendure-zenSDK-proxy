@@ -100,6 +100,7 @@ def calc_active_count(
     upper: float,
     lower: float,
     force_all: bool,
+    device_change_diff: int = 5,
 ) -> int:
     """
     Decide how many devices should be active based on power level and SoC state.
@@ -115,12 +116,22 @@ def calc_active_count(
         return n
 
     if n == 2:
-        # Emergency: if exactly one device is below minSoc while charging,
-        # activate both so the depleted one can catch up.
         if ac_mode == 1:
             below = [d.electric_level < min_soc_pct for d in devs[:2]]
             if sum(below) == 1:
+                return 1
+            if sum(d.soc_limit == 1 for d in devs[:2]) == 1:
+                return 1
+            high_soc = any(d.electric_level >= 98 for d in devs[:2])
+            avg_soc = math.ceil(sum(d.electric_level for d in devs[:2]) / 2)
+            if high_soc and avg_soc >= 98 - device_change_diff:
                 return 2
+        if ac_mode == 2:
+            below = [d.electric_level <= min_soc_pct for d in devs[:2]]
+            if sum(below) == 1:
+                return 1
+            if sum(d.soc_limit == 2 for d in devs[:2]) == 1:
+                return 1
         if total_power == 0:
             return prev
         if total_power < lower:
@@ -164,26 +175,79 @@ def apply_transition(
     Phase 1 (0 – 75 %): 95 % to original device, 5 % to new.
     Phase 2 (75 – 100 %): 75 % to original device, 25 % to new.
     """
-    if state.transition_start_ts <= 0:
+    forced_start = getattr(state, "forced_dual_transition_start_ts", 0.0)
+    single_to_dual_start = getattr(state, "single_to_dual_transition_start_ts", 0.0)
+    legacy_start = state.transition_start_ts
+
+    if forced_start <= 0 and single_to_dual_start <= 0 and legacy_start <= 0:
         return per_device
 
-    elapsed = now_ts - state.transition_start_ts
+    if forced_start > 0:
+        return _apply_forced_dual_transition(per_device, state, now_ts, timer)
+
+    start = single_to_dual_start or legacy_start
+    elapsed = now_ts - start
     if elapsed >= timer:
+        state.single_to_dual_transition_start_ts = 0.0
         state.transition_start_ts = 0.0
         return per_device
 
-    orig = state.transition_original_device
+    orig = (
+        state.single_to_dual_transition_original_device
+        if single_to_dual_start > 0
+        else state.transition_original_device
+    )
+    if orig >= len(per_device):
+        state.single_to_dual_transition_start_ts = 0.0
+        state.transition_start_ts = 0.0
+        return per_device
+
+    total = sum(per_device)
+    other_count = max(1, len([power for i, power in enumerate(per_device) if i != orig]))
+    progress = elapsed / timer
+    orig_frac = 0.95 if progress < 0.75 else 0.75
+    remainder = total - round(total * orig_frac)
+
+    result = [0] * len(per_device)
+    result[orig] = round(total * orig_frac)
+    for i in range(len(result)):
+        if i != orig:
+            result[i] = round(remainder / other_count)
+    return result
+
+
+def _apply_forced_dual_transition(
+    per_device: list[int],
+    state: ProxyState,
+    now_ts: float,
+    timer: int,
+) -> list[int]:
+    start = state.forced_dual_transition_start_ts
+    elapsed = now_ts - start
+    if elapsed >= timer:
+        state.forced_dual_transition_start_ts = 0.0
+        state.transition_start_ts = 0.0
+        return per_device
+
+    orig = state.forced_dual_transition_original_device
     new = state.single_mode_active_device
 
     if orig == new or orig >= len(per_device) or new >= len(per_device):
-        state.transition_start_ts = 0.0
+        state.forced_dual_transition_start_ts = 0.0
         return per_device
 
     progress = elapsed / timer
-    orig_frac = 0.95 if progress < 0.75 else 0.75
+    if progress < 0.57:
+        orig_frac = 0.95
+    elif progress < 0.71:
+        orig_frac = 0.75
+    elif progress < 0.85:
+        orig_frac = 0.50
+    else:
+        orig_frac = 0.25
     total = sum(per_device)
 
-    result = list(per_device)
+    result = [0] * len(per_device)
     result[orig] = round(total * orig_frac)
     result[new] = round(total * (1.0 - orig_frac))
     return result

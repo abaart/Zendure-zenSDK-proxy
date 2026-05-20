@@ -308,7 +308,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(state.ac_mode, 1)
         self.assertEqual(state.latest_power_cmd, 2400)
         self.assertEqual([dev.latest_power_cmd for dev in state.devices], [800, 799, 800])
-        self.assertEqual([client.posts[0]["properties"]["acMode"] for client in clients], [1, 1, 1])
+        self.assertEqual(["acMode" in client.posts[0]["properties"] for client in clients], [False, False, False])
         self.assertEqual(
             [client.posts[0]["properties"]["inputLimit"] for client in clients],
             [800, 799, 800],
@@ -374,6 +374,96 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(metrics.incoming["GET"].total, 5)
         self.assertEqual(metrics.queue_get_coalesced_requests_total, 7)
         self.assertEqual(metrics.devices[0].get.total, 11)
+
+    def test_diagnostics_reset_clears_node_red_counters(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._state = ProxyState(
+            device_count=2,
+            devices=[DeviceState(ip="ip1"), DeviceState(ip="ip2")],
+            counter_get_received=3,
+            counter_get_replies=2,
+            counter_get_timeouts=1,
+            counter_config_drop=4,
+            counter_serial_missing_drop=5,
+            counter_post_received=6,
+            counter_post_replies=7,
+            counter_missing=[8, 9, 10],
+        )
+
+        proxy._reset_node_red_counters()
+
+        self.assertEqual(proxy._state.counter_get_received, 0)
+        self.assertEqual(proxy._state.counter_get_replies, 0)
+        self.assertEqual(proxy._state.counter_get_timeouts, 0)
+        self.assertEqual(proxy._state.counter_config_drop, 0)
+        self.assertEqual(proxy._state.counter_serial_missing_drop, 0)
+        self.assertEqual(proxy._state.counter_post_received, 0)
+        self.assertEqual(proxy._state.counter_post_replies, 0)
+        self.assertEqual(proxy._state.counter_missing, [0, 0, 0])
+
+    def test_diagnostics_warnings_show_mismatched_limits_and_stale_get(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._state = ProxyState(
+            device_count=2,
+            devices=[
+                DeviceState(
+                    ip="ip1",
+                    charge_max_limit=800,
+                    inverse_max_power=700,
+                    last_response={"properties": {"minSoc": 100, "socSet": 900}},
+                ),
+                DeviceState(
+                    ip="ip2",
+                    charge_max_limit=900,
+                    inverse_max_power=800,
+                    last_response={"properties": {"minSoc": 120, "socSet": 1000}},
+                ),
+            ],
+            latest_get_ts=0,
+        )
+
+        warnings = proxy._diagnostics_warnings()
+
+        self.assertIn("chargeMaxLimit differs between devices: [800, 900]", warnings)
+        self.assertIn("inverseMaxPower differs between devices: [700, 800]", warnings)
+        self.assertIn("minSoc differs between devices: [100, 120]", warnings)
+        self.assertIn("socSet differs between devices: [900, 1000]", warnings)
+        self.assertIn("No recent GET within 10 seconds", warnings)
+
+    def test_debug_payload_capture_writes_to_existing_file_logger(self) -> None:
+        class FakeFileLogger:
+            def __init__(self):
+                self.lines = []
+
+            def log(self, message: str, level: str) -> None:
+                self.lines.append((message, level))
+
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = types.SimpleNamespace(debug_payload_capture_enabled=True)
+        proxy._file_logger = FakeFileLogger()
+        proxy.log = lambda *args, **kwargs: None
+
+        proxy._debug_capture_payload("GET", "To Home Assistant", {"ok": True})
+
+        self.assertEqual(proxy._file_logger.lines[0][1], "DEBUG")
+        self.assertIn('"debug_message_type": "GET"', proxy._file_logger.lines[0][0])
+        self.assertIn('"debug_direction": "To Home Assistant"', proxy._file_logger.lines[0][0])
+
+    def test_passive_devices_get_zero_timestamp_after_get_success(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._state = ProxyState(
+            device_count=2,
+            devices=[
+                DeviceState(ip="ip1", latest_power_cmd=500),
+                DeviceState(ip="ip2", latest_power_cmd=0),
+            ],
+            devices_active_idx=[0],
+        )
+
+        proxy._mark_passive_zero_timestamps()
+
+        self.assertEqual(proxy._state.devices[0].latest_power_cmd_zero_ts, 0.0)
+        self.assertGreater(proxy._state.devices[1].latest_power_cmd_zero_ts, 0)
 
 
 def _combined_three_device_response() -> dict:

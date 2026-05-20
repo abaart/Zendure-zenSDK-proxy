@@ -17,6 +17,10 @@ from zendure_proxy_power import PROXY_VERSION, epoch
 from zendure_proxy_state import ProxyState
 
 
+class GatewayTimeoutError(RuntimeError):
+    """Raised when strict Node-RED GET compatibility must return HTTP 504."""
+
+
 async def execute_get(
     clients: list[DeviceClient],
     state: ProxyState,
@@ -43,6 +47,8 @@ async def execute_get(
             "One or more devices did not respond; returning cached response",
             level="WARNING",
         )
+        if getattr(cfg, "node_red_compat_strict_get_errors", False):
+            raise GatewayTimeoutError("Gateway Timeout")
         if state.last_get_response:
             return state.last_get_response
         raise RuntimeError("Devices unreachable and no cached response available")

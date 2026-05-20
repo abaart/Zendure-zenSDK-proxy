@@ -42,6 +42,7 @@ class ProxyState:
 
     # Active-device bookkeeping
     device_active_count: int = 1
+    devices_active_idx_previous: list[int] = field(default_factory=lambda: [0])
     devices_active_idx: list[int] = field(default_factory=lambda: [0])
     single_mode_active_device: int = 0   # index into devices[]
 
@@ -59,6 +60,10 @@ class ProxyState:
     # Smooth device-switch transition
     transition_start_ts: float = 0.0
     transition_original_device: int = 0
+    single_to_dual_transition_start_ts: float = 0.0
+    single_to_dual_transition_original_device: int = 0
+    forced_dual_transition_start_ts: float = 0.0
+    forced_dual_transition_original_device: int = 0
 
     # Dual-mode damper state
     dualmode_damper_enabled: bool = False
@@ -73,12 +78,16 @@ class ProxyState:
     # Counters & timestamps
     counter_get_received: int = 0
     counter_get_replies: int = 0
+    counter_get_timeouts: int = 0
+    counter_config_drop: int = 0
+    counter_serial_missing_drop: int = 0
     counter_post_received: int = 0
     counter_post_replies: int = 0
     counter_missing: list[int] = field(default_factory=lambda: [0, 0, 0])
     latest_get_ts: float = 0.0
     latest_power_message_ts: float = 0.0
     last_post_payload: Optional[dict] = None   # for manual-mode repeat
+    standby_last_sent_by_sn: dict[str, float] = field(default_factory=dict)
 
     # Cached last combined GET response (returned when a device is temporarily down)
     last_get_response: Optional[dict] = None
