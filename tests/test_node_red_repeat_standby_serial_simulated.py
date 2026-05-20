@@ -317,21 +317,24 @@ def test_serial_retry_populates_missing_serial_numbers() -> None:
 def test_report_request_retries_missing_serials_before_returning_503() -> None:
     proxy = ZendureProxy.__new__(ZendureProxy)
     client = FakeDeviceClient(None)
-    proxy._cfg = Config(device_ips=["ip1"])
+    proxy._cfg = Config(device_ips=["ip1"], ha_get_response_timeout=0.01)
     proxy._clients = [client]
     proxy._state = ProxyState(device_count=1, devices=[DeviceState(ip="ip1")])
     proxy._metrics = _FakeMetrics()
+    proxy._queue = _NeverResolvingQueue()
     proxy._proxy_log = lambda *args, **kwargs: None
     proxy._publish_proxy_ha_sensors = _noop_publish
+    proxy._record_incoming_depths = _noop_record_depths
+    proxy._debug_capture_payload = lambda *args, **kwargs: None
 
     data, status = asyncio.run(proxy._execute_report_request())
 
-    assert status == 503
-    assert data == {"error": "Initializing - try again shortly"}
-    assert client.get_calls == 1
+    assert status == 504
+    assert data == {"error": "Cached GET response expired"}
+    assert client.get_calls == 0
 
 
-def test_execute_get_raises_gateway_timeout_when_strict_compat_is_enabled() -> None:
+def test_execute_get_returns_partial_response_when_strict_compat_is_enabled() -> None:
     state = ProxyState(
         device_count=2,
         devices=[
@@ -342,22 +345,20 @@ def test_execute_get_raises_gateway_timeout_when_strict_compat_is_enabled() -> N
     )
     clients = [FakeDeviceClient(device_response(1, "SN1")), FakeDeviceClient(None)]
 
-    try:
-        asyncio.run(
-            execute_get(
-                clients,
-                state,
-                Config(
-                    device_ips=["ip1", "ip2"],
-                    node_red_compat_strict_get_errors=True,
-                ),
-                lambda *args, **kwargs: None,
-            )
+    response = asyncio.run(
+        execute_get(
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                node_red_compat_strict_get_errors=True,
+            ),
+            lambda *args, **kwargs: None,
         )
-    except GatewayTimeoutError as exc:
-        assert str(exc) == "Gateway Timeout"
-    else:
-        raise AssertionError("GatewayTimeoutError was not raised")
+    )
+
+    assert response["proxyHealth"]["reason"] == "upstream_partial"
+    assert response["proxyHealth"]["degradedDevices"][0]["serialNumber"] == "SN2"
 
 
 def test_successful_get_updates_latest_get_timestamp_only_after_device_replies() -> None:
@@ -381,21 +382,17 @@ def test_successful_get_updates_latest_get_timestamp_only_after_device_replies()
 
     previous_ts = state.latest_get_ts
     clients = [FakeDeviceClient(None)]
-    try:
-        asyncio.run(
-            execute_get(
-                clients,
-                state,
-                Config(device_ips=["ip1"], node_red_compat_strict_get_errors=True),
-                lambda *args, **kwargs: None,
-            )
+    response = asyncio.run(
+        execute_get(
+            clients,
+            state,
+            Config(device_ips=["ip1"], node_red_compat_strict_get_errors=True),
+            lambda *args, **kwargs: None,
         )
-    except GatewayTimeoutError:
-        pass
-    else:
-        raise AssertionError("GatewayTimeoutError was not raised")
+    )
 
     assert state.latest_get_ts == previous_ts
+    assert response["proxyHealth"]["servedFromCache"] is True
 
 
 def test_report_request_returns_gateway_timeout_for_strict_get_error() -> None:
@@ -419,7 +416,7 @@ def test_report_request_returns_gateway_timeout_for_strict_get_error() -> None:
     data, status = asyncio.run(proxy._execute_report_request())
 
     assert status == 504
-    assert data == {"error": "Gateway Timeout"}
+    assert data == {"error": "Cached GET response expired"}
 
 
 def test_simulated_device_urls_and_placeholder_ips_are_compatible_with_node_red() -> None:
@@ -476,6 +473,11 @@ class _GatewayTimeoutQueue:
         future = asyncio.get_event_loop().create_future()
         future.set_exception(GatewayTimeoutError("Gateway Timeout"))
         return future
+
+
+class _NeverResolvingQueue:
+    async def enqueue_get(self):
+        return asyncio.get_event_loop().create_future()
 
 
 class _FakeMetrics:

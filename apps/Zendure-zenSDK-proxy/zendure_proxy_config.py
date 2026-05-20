@@ -17,7 +17,12 @@ class Config:
     # Server
     server_port: int = 8120
     server_host: str = "0.0.0.0"
-    zendure_request_timeout: float = 15.0
+    zendure_request_timeout: float = 60.0
+    ha_get_response_timeout: float = 8.0
+    get_cache_max_age: float = 300.0
+    get_rate_limit_window: float = 1.0
+    get_recovery_window: float = 30.0
+    degraded_power_hold_seconds: float = 1800.0
 
     # Mode-switching thresholds
     single_mode_upper_pct: int = 100
@@ -103,7 +108,14 @@ def load_config(args: dict) -> Config:
         device_ips=[ip for ip in raw if ip and not is_placeholder_device_ip(ip)],
         server_port=int(args.get("server_port", 8120)),
         server_host=str(args.get("server_host", "0.0.0.0")),
-        zendure_request_timeout=float(args.get("zendure_request_timeout", 15.0)),
+        zendure_request_timeout=float(args.get("zendure_request_timeout", 60.0)),
+        ha_get_response_timeout=float(args.get("ha_get_response_timeout", 8.0)),
+        get_cache_max_age=float(args.get("get_cache_max_age", 300.0)),
+        get_rate_limit_window=float(args.get("get_rate_limit_window", 1.0)),
+        get_recovery_window=float(args.get("get_recovery_window", 30.0)),
+        degraded_power_hold_seconds=float(
+            args.get("degraded_power_hold_seconds", 1800.0)
+        ),
         single_mode_upper_pct=int(args.get("single_mode_upperlimit_percent", 100)),
         single_mode_lower_pct=int(args.get("single_mode_lowerlimit_percent", 40)),
         device_change_diff=int(args.get("single_mode_change_device_diff", 5)),

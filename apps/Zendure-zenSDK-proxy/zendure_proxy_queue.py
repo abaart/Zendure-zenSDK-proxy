@@ -66,6 +66,17 @@ class RequestQueue:
 
         return gets, _dedup_posts(posts_raw)
 
+    async def drain_gets_nowait(self) -> list[asyncio.Future]:
+        """Drain pending GET futures without touching queued POST requests."""
+        async with self._lock:
+            gets = list(self._pending_gets)
+            self._pending_gets.clear()
+            if self._pending_posts:
+                self._event.set()
+            else:
+                self._event.clear()
+        return _open_futures(gets)
+
     async def depths(self) -> tuple[int, int]:
         """Return current incoming GET and POST queue depths."""
         async with self._lock:
@@ -88,3 +99,7 @@ def _dedup_posts(posts: list[tuple[dict, asyncio.Future]]) -> list[PostGroup]:
         latest_payload, latest_fut = group[-1]
         result.append((latest_payload, latest_fut, skipped))
     return result
+
+
+def _open_futures(futures: list[asyncio.Future]) -> list[asyncio.Future]:
+    return [fut for fut in futures if not fut.done()]

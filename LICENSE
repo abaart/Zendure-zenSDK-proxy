@@ -14,6 +14,7 @@ The AppDaemon/Python implementation adds these project files:
 - apps/Zendure-zenSDK-proxy/zendure_proxy_config.py
 - apps/Zendure-zenSDK-proxy/zendure_proxy_device_client.py
 - apps/Zendure-zenSDK-proxy/zendure_proxy_get_handler.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_health.py
 - apps/Zendure-zenSDK-proxy/zendure_proxy_logging.py
 - apps/Zendure-zenSDK-proxy/zendure_proxy_metrics.py
 - apps/Zendure-zenSDK-proxy/zendure_proxy_post_handler.py
@@ -31,8 +32,17 @@ The AppDaemon/Python implementation has three concrete goals:
 - RequestQueue in zendure_proxy_queue.py and DeviceClient in
   zendure_proxy_device_client.py serialize and coalesce HTTP requests, so Zendure
   devices receive fewer simultaneous requests in edge-case situations.
+- zendure_proxy_health.py tracks Healthy, Degraded, and Dead status per Zendure,
+  so the AppDaemon/Python implementation can answer Home Assistant from cache
+  and continue controlling healthy Zendures when one Zendure stops responding.
+- During Degraded status, the AppDaemon/Python implementation does not send POST
+  commands to the degraded Zendure, but it counts the last measured wattage from
+  that Zendure for a configurable period before treating the Zendure as Dead.
 - The Python modules in apps/Zendure-zenSDK-proxy/ make GitHub review and
   contribution easier than reviewing a single-line Node-RED JSON export.
+
+The original Node-RED implementation from gast777/Zendure-zenSDK-proxy remains
+unchanged by these AppDaemon/Python additions.
 
 All rights reserved.
 

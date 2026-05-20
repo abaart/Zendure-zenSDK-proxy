@@ -11,15 +11,51 @@ SensorMap = dict[str, tuple[Any, dict[str, Any]]]
 def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> SensorMap:
     props = response.get("properties", {})
     pack_data = response.get("packData") or []
+    health = response.get("proxyHealth") or {}
+    configured_count = _int(health.get("configuredCount", 3), 3)
+    unhealthy_slots = _health_slots(health, "unhealthyDevices")
+    excluded_slots = _health_slots(health, "excludedDevices")
+    recovering_slots = _health_slots(health, "recoveringDevices")
+    degraded_slots = _health_slots(health, "degradedDevices")
+    dead_slots = _health_slots(health, "deadDevices")
+    unavailable_slots = excluded_slots | recovering_slots
     sensors: SensorMap = {}
 
     def add(entity_id: str, state: Any, friendly_name: str, **attrs: Any) -> None:
         sensors[entity_id] = (state, {"friendly_name": friendly_name, **attrs})
 
     for idx in range(1, 4):
+        health_item = _health_item(health, idx)
+        health_state = (
+            "unavailable"
+            if idx > configured_count
+            else (
+                "Dead"
+                if idx in dead_slots
+                else ("Degraded" if idx in degraded_slots or idx in unhealthy_slots else "Healthy")
+            )
+        )
+        add(
+            f"sensor.zendure_{idx}_health",
+            health_state,
+            f"Zendure {idx} Health",
+            icon="mdi:heart-pulse",
+            serial_number=health_item.get("serialNumber")
+            or props.get(f"sn_{idx}", ""),
+            ip_address=health_item.get("ipAddress")
+            or props.get(f"ipAddress_{idx}", "unknown"),
+            last_successful_get_age_seconds=health_item.get(
+                "lastSuccessfulGetAgeSeconds"
+            ),
+            excluded_from_power=idx in unavailable_slots,
+            recovery_seconds_remaining=health_item.get(
+                "recoverySecondsRemaining", 0.0
+            ),
+        )
+        slot_unavailable = idx in unavailable_slots
         add(
             f"sensor.zendure_{idx}_laadpercentage",
-            props.get(f"electricLevel_{idx}", 0),
+            "unavailable" if slot_unavailable else props.get(f"electricLevel_{idx}", 0),
             f"Zendure {idx} Laadpercentage",
             device_class="battery",
             unit_of_measurement="%",
@@ -27,15 +63,19 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         )
         add(
             f"sensor.vermogensopdracht_zendure_{idx}",
-            props.get(f"latestPowerCmd_{idx}", 0),
+            "unavailable" if slot_unavailable else props.get(f"latestPowerCmd_{idx}", 0),
             f"Vermogensopdracht Zendure {idx}",
             unit_of_measurement="W",
             state_class="measurement",
             device_class="power",
         )
-        directed_power = _directed_power(
-            props.get(f"gridInputPower_{idx}", 0),
-            props.get(f"outputHomePower_{idx}", 0),
+        directed_power = (
+            "unavailable"
+            if slot_unavailable
+            else _directed_power(
+                props.get(f"gridInputPower_{idx}", 0),
+                props.get(f"outputHomePower_{idx}", 0),
+            )
         )
         add(
             f"sensor.zendure_{idx}_vermogen_aansturing",
@@ -45,7 +85,7 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             state_class="measurement",
             device_class="power",
         )
-        mode = _power_mode(directed_power)
+        mode = "unavailable" if slot_unavailable else _power_mode(directed_power)
         add(
             f"sensor.zendure_{idx}_modus",
             mode,
@@ -54,28 +94,36 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         )
         add(
             f"sensor.zendure_{idx}_relais_stand",
-            _relay_state(props.get(f"acMode_{idx}", 0)),
+            "unavailable" if slot_unavailable else _relay_state(props.get(f"acMode_{idx}", 0)),
             f"Zendure {idx} Relais Stand",
             icon="mdi:swap-vertical-bold",
         )
         add(
             f"sensor.zendure_{idx}_kalibratie_bezig",
-            _map_int(props.get(f"socStatus_{idx}", 0), {0: "Nee", 1: "Kalibreren"}),
+            "unavailable"
+            if slot_unavailable
+            else _map_int(props.get(f"socStatus_{idx}", 0), {0: "Nee", 1: "Kalibreren"}),
             f"Zendure {idx} Kalibratie bezig",
             icon="mdi:battery-heart-variant",
         )
         add(
             f"sensor.zendure_{idx}_opslagmodus",
-            _map_int(
-                props.get(f"smartMode_{idx}", 0),
-                {1: "Opslaan in RAM", 0: "Opslaan in Flash"},
+            "unavailable"
+            if slot_unavailable
+            else _map_int(
+                    props.get(f"smartMode_{idx}", 0),
+                    {1: "Opslaan in RAM", 0: "Opslaan in Flash"},
             ),
             f"Zendure {idx} Opslagmodus",
             icon="mdi:floppy",
         )
-        soc_limit = _map_int(
-            props.get(f"socLimit_{idx}", 0),
-            {0: "Normale werking", 1: "Laadlimiet bereikt", 2: "Ontlaadlimiet bereikt"},
+        soc_limit = (
+            "unavailable"
+            if slot_unavailable
+            else _map_int(
+                props.get(f"socLimit_{idx}", 0),
+                {0: "Normale werking", 1: "Laadlimiet bereikt", 2: "Ontlaadlimiet bereikt"},
+            )
         )
         add(
             f"sensor.zendure_{idx}_soc_limiet_status",
@@ -85,16 +133,20 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         )
         add(
             f"sensor.zendure_{idx}_omvormer_temperatuur",
-            _zendure_temp(props.get(f"hyperTmp_{idx}", 2731)),
+            "unavailable" if slot_unavailable else _zendure_temp(props.get(f"hyperTmp_{idx}", 2731)),
             f"Zendure {idx} Omvormer Temperatuur",
             unit_of_measurement="°C",
             state_class="measurement",
             device_class="temperature",
             icon="mdi:thermometer",
         )
-        offgrid = _map_int(
-            props.get(f"gridOffMode_{idx}", 2),
-            {0: "Normaal", 1: "Eco", 2: "Uitgeschakeld"},
+        offgrid = (
+            "unavailable"
+            if slot_unavailable
+            else _map_int(
+                props.get(f"gridOffMode_{idx}", 2),
+                {0: "Normaal", 1: "Eco", 2: "Uitgeschakeld"},
+            )
         )
         add(
             f"sensor.zendure_{idx}_offgrid_modus",
@@ -104,7 +156,7 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         )
         add(
             f"sensor.zendure_{idx}_serienummer",
-            props.get(f"sn_{idx}", ""),
+            props.get(f"sn_{idx}", "") or health_item.get("serialNumber", ""),
             f"Zendure {idx} Serienummer",
             icon="mdi:identifier",
         )
@@ -114,6 +166,32 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             f"Zendure {idx} IP Adres",
             icon="mdi:ip",
         )
+
+    unhealthy_serials = [
+        item.get("serialNumber", "unknown")
+        for item in health.get("unhealthyDevices", [])
+    ]
+    pool_degraded = (
+        _int(health.get("unhealthyCount", 0)) > 0
+        or _int(health.get("excludedCount", 0)) > 0
+        or _int(health.get("recoveringCount", 0)) > 0
+        or _int(health.get("degradedCount", 0)) > 0
+        or _int(health.get("deadCount", 0)) > 0
+    )
+    add(
+        "sensor.proxy_zendure_pool_healthy",
+        "Degraded" if pool_degraded else "Healthy",
+        "Proxy Zendure Pool Healthy",
+        icon="mdi:battery-heart",
+        configured_count=configured_count,
+        healthy_count=health.get("healthyCount", configured_count),
+        unhealthy_count=health.get("unhealthyCount", 0),
+        excluded_count=health.get("excludedCount", 0),
+        recovering_count=health.get("recoveringCount", 0),
+        degraded_count=health.get("degradedCount", 0),
+        dead_count=health.get("deadCount", 0),
+        unhealthy_serial_numbers=unhealthy_serials,
+    )
 
     add(
         "sensor.vermogensopdracht",
@@ -230,6 +308,22 @@ def _active_device(value: Any) -> str:
         6: "Zendure 2 en 3",
         7: "Alle",
     }.get(_int(value, -99), "Onbekend")
+
+
+def _health_slots(health: dict, key: str) -> set[int]:
+    return {
+        _int(item.get("slot"), -1)
+        for item in health.get(key, [])
+        if isinstance(item, dict)
+    }
+
+
+def _health_item(health: dict, slot: int) -> dict:
+    for key in ("unhealthyDevices", "excludedDevices", "recoveringDevices"):
+        for item in health.get(key, []):
+            if isinstance(item, dict) and _int(item.get("slot"), -1) == slot:
+                return item
+    return {}
 
 
 def _soc_limit_icon(state: str) -> str:

@@ -30,6 +30,11 @@ from zendure_proxy_config import Config, load_config
 from zendure_proxy_device_client import DeviceClient
 from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors
+from zendure_proxy_health import (
+    cache_is_usable,
+    eligible_device_indices,
+    response_with_proxy_health,
+)
 from zendure_proxy_logging import ProxyFileLogger, render_log_dashboard
 from zendure_proxy_metrics import MetricsRegistry, render_metrics_dashboard
 from zendure_proxy_mqtt_discovery import mqtt_sensor_config, mqtt_sensor_topics
@@ -70,6 +75,7 @@ class ZendureProxy(hass.Hass):
             equal_mode=self._cfg.equal_mode,
             always_dual_mode=self._cfg.always_dual_mode,
             dualmode_damper_enabled=self._cfg.damper_enable,
+            startup_ts=now(),
         )
         self._queue = RequestQueue()
 
@@ -651,6 +657,7 @@ class ZendureProxy(hass.Hass):
         status = 500
         timeout = False
         self._state.counter_get_received += 1
+        request_ts = now()
 
         try:
             if not self._cfg.device_ips:
@@ -658,21 +665,33 @@ class ZendureProxy(hass.Hass):
                 self._state.counter_config_drop += 1
                 return {"error": "No devices configured"}, status
 
-            if not all(d.sn for d in self._state.devices):
-                await self._ensure_serial_numbers()
-            if not all(d.sn for d in self._state.devices):
-                self._state.counter_serial_missing_drop += 1
-                if self._state.last_get_response:
-                    status = 200
-                    await self._publish_proxy_ha_sensors(self._state.last_get_response)
-                    return self._state.last_get_response, status
-                status = 503
-                return {"error": "Initializing - try again shortly"}, status
+            previous_ha_get_ts = self._state.last_ha_get_ts
+            self._state.last_ha_get_ts = request_ts
+            if (
+                previous_ha_get_ts > 0
+                and request_ts - previous_ha_get_ts <= self._cfg.get_rate_limit_window
+                and cache_is_usable(self._state, self._cfg, current_ts=request_ts)
+            ):
+                status = 200
+                data = response_with_proxy_health(
+                    self._state.last_get_response or {},
+                    self._state,
+                    self._cfg,
+                    served_from_cache=True,
+                    reason="rate_limited",
+                    refresh_in_progress=self._state.get_refresh_in_progress,
+                    current_ts=request_ts,
+                )
+                await self._publish_proxy_ha_sensors(data)
+                self._debug_capture_payload("GET", "To Home Assistant", data)
+                return data, status
 
             fut = await self._queue.enqueue_get()
             await self._record_incoming_depths()
             try:
-                data = await asyncio.wait_for(fut, timeout=30.0)
+                data = await asyncio.wait_for(
+                    fut, timeout=self._cfg.ha_get_response_timeout
+                )
                 self._state.counter_get_replies += 1
                 status = 200
                 self._mark_passive_zero_timestamps()
@@ -683,23 +702,55 @@ class ZendureProxy(hass.Hass):
             except asyncio.TimeoutError:
                 timeout = True
                 self._state.counter_get_timeouts += 1
-                if self._state.last_get_response:
+                if cache_is_usable(self._state, self._cfg, current_ts=now()):
                     status = 200
-                    await self._publish_proxy_ha_sensors(self._state.last_get_response)
-                    return self._state.last_get_response, status
+                    data = response_with_proxy_health(
+                        self._state.last_get_response or {},
+                        self._state,
+                        self._cfg,
+                        served_from_cache=True,
+                        reason="ha_get_timeout",
+                        refresh_in_progress=True,
+                        current_ts=now(),
+                    )
+                    await self._publish_proxy_ha_sensors(data)
+                    self._debug_capture_payload("GET", "To Home Assistant", data)
+                    return data, status
                 status = 504
-                return {"error": "Upstream timeout"}, status
+                return {"error": "Cached GET response expired"}, status
             except GatewayTimeoutError:
                 timeout = True
                 self._state.counter_get_timeouts += 1
+                if cache_is_usable(self._state, self._cfg, current_ts=now()):
+                    status = 200
+                    data = response_with_proxy_health(
+                        self._state.last_get_response or {},
+                        self._state,
+                        self._cfg,
+                        served_from_cache=True,
+                        reason="upstream_partial",
+                        refresh_in_progress=self._state.get_refresh_in_progress,
+                        current_ts=now(),
+                    )
+                    await self._publish_proxy_ha_sensors(data)
+                    return data, status
                 status = 504
-                return {"error": "Gateway Timeout"}, status
+                return {"error": "Cached GET response expired"}, status
             except Exception as exc:
                 self._proxy_log(f"GET handler error: {exc}", level="ERROR")
-                if self._state.last_get_response:
+                if cache_is_usable(self._state, self._cfg, current_ts=now()):
                     status = 200
-                    await self._publish_proxy_ha_sensors(self._state.last_get_response)
-                    return self._state.last_get_response, status
+                    data = response_with_proxy_health(
+                        self._state.last_get_response or {},
+                        self._state,
+                        self._cfg,
+                        served_from_cache=True,
+                        reason="upstream_partial",
+                        refresh_in_progress=self._state.get_refresh_in_progress,
+                        current_ts=now(),
+                    )
+                    await self._publish_proxy_ha_sensors(data)
+                    return data, status
                 status = 502
                 return {"error": str(exc)}, status
         finally:
@@ -811,14 +862,25 @@ class ZendureProxy(hass.Hass):
                 get_response: Optional[dict] = None
 
                 if gets:
+                    gets = [fut for fut in gets if not fut.done()]
                     try:
+                        self._state.get_refresh_in_progress = True
                         get_response = await execute_get(
                             self._clients, self._state, self._cfg, self._proxy_log
                         )
+                        self._state.get_refresh_in_progress = False
+                        self._mark_passive_zero_timestamps()
+                        await self._standby_check()
+                        await self._publish_proxy_ha_sensors(get_response)
                         for fut in gets:
                             if not fut.done():
                                 fut.set_result(get_response)
+                        pending_gets = await self._queue.drain_gets_nowait()
+                        for fut in pending_gets:
+                            if not fut.done():
+                                fut.set_result(get_response)
                     except Exception as exc:
+                        self._state.get_refresh_in_progress = False
                         self._proxy_log(f"GET execution failed: {exc}", level="ERROR")
                         cached = self._state.last_get_response
                         for fut in gets:
@@ -827,7 +889,17 @@ class ZendureProxy(hass.Hass):
                                     cached
                                     and not isinstance(exc, GatewayTimeoutError)
                                 ):
-                                    fut.set_result(cached)
+                                    fut.set_result(
+                                        response_with_proxy_health(
+                                            cached,
+                                            self._state,
+                                            self._cfg,
+                                            served_from_cache=True,
+                                            reason="upstream_partial",
+                                            refresh_in_progress=False,
+                                            current_ts=now(),
+                                        )
+                                    )
                                 else:
                                     fut.set_exception(exc)
 
@@ -906,9 +978,10 @@ def should_repeat_last_power(
 ) -> bool:
     """Return True when Node-RED manual power-repeat conditions are satisfied."""
     ts = now() if current_ts is None else current_ts
+    eligible = eligible_device_indices(state, cfg, current_ts=ts)
     if not cfg.manual_mode_repeat:
         return False
-    if state.device_count < 2:
+    if len(eligible) < 2:
         return False
     if state.last_post_payload is None:
         return False
@@ -926,9 +999,9 @@ def should_repeat_last_power(
         return False
     if state.latest_power_cmd == 0:
         return False
-    if state.latest_power_cmd > 0 and all(d.soc_limit == 1 for d in state.devices):
+    if state.latest_power_cmd > 0 and all(state.devices[i].soc_limit == 1 for i in eligible):
         return False
-    if state.latest_power_cmd < 0 and all(d.soc_limit == 2 for d in state.devices):
+    if state.latest_power_cmd < 0 and all(state.devices[i].soc_limit == 2 for i in eligible):
         return False
     return True
 

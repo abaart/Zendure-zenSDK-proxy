@@ -81,8 +81,14 @@ _install_fake_aiohttp()
 
 from zendure_proxy import ZendureProxy  # noqa: E402
 from zendure_proxy_config import Config  # noqa: E402
-from zendure_proxy_get_handler import build_combined_response  # noqa: E402
+from zendure_proxy_get_handler import build_combined_response, execute_get  # noqa: E402
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors  # noqa: E402
+from zendure_proxy_health import (  # noqa: E402
+    degraded_power_by_index,
+    eligible_device_indices,
+    health_summary,
+    record_get_results,
+)
 from zendure_proxy_metrics import MetricsRegistry  # noqa: E402
 from zendure_proxy_mqtt_discovery import mqtt_sensor_config  # noqa: E402
 from zendure_proxy_post_handler import execute_post  # noqa: E402
@@ -173,8 +179,80 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             "zendure_proxy/sensor/zendure_2_serienummer/attributes",
         )
 
+    async def test_report_request_returns_cache_after_ha_get_timeout(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(
+            device_ips=["ip1"],
+            ha_get_response_timeout=0.01,
+            get_cache_max_age=999999999.0,
+        )
+        proxy._state = ProxyState(
+            device_count=1,
+            devices=[DeviceState(ip="ip1", sn="SN1")],
+            startup_ts=100.0,
+            latest_get_ts=100.0,
+            last_get_response={
+                "proxyVersion": "test",
+                "packData": [],
+                "properties": {"sn_1": "SN1", "ipAddress_1": "ip1"},
+            },
+        )
+        proxy._queue = _NeverResolvingQueue()
+        proxy._metrics = _FakeMetrics()
+        proxy._publish_proxy_ha_sensors = _noop_publish
+        proxy._record_incoming_depths = _noop_record_depths
+        proxy._debug_capture_payload = lambda *args, **kwargs: None
+
+        data, status = await proxy._execute_report_request()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data["proxyHealth"]["reason"], "ha_get_timeout")
+        self.assertTrue(data["proxyHealth"]["servedFromCache"])
+
+    async def test_processor_updates_cache_and_answers_pending_gets(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(device_ips=["ip1"], get_cache_max_age=300.0)
+        proxy._state = ProxyState(
+            device_count=1,
+            devices=[DeviceState(ip="ip1", sn="SN1")],
+            startup_ts=100.0,
+        )
+        client = _DelayedGetClient(_device(1, "SN1"))
+        proxy._clients = [client]
+        proxy._queue = __import__("zendure_proxy_queue").RequestQueue()
+        proxy._metrics = _FakeMetrics()
+        proxy._proxy_log = lambda *args, **kwargs: None
+        proxy._record_incoming_depths = _noop_record_depths
+        proxy._publish_proxy_ha_sensors = _noop_publish
+        proxy._standby_check = _noop_record_depths
+        proxy._mark_passive_zero_timestamps = lambda: None
+
+        processor = asyncio.create_task(proxy._processor())
+        first = await proxy._queue.enqueue_get()
+        await asyncio.sleep(0)
+        second = await proxy._queue.enqueue_get()
+        client.release()
+
+        first_data = await asyncio.wait_for(first, timeout=1)
+        second_data = await asyncio.wait_for(second, timeout=1)
+        processor.cancel()
+        await processor
+
+        self.assertEqual(first_data["properties"]["sn_1"], "SN1")
+        self.assertEqual(second_data["properties"]["sn_1"], "SN1")
+        self.assertEqual(proxy._state.last_get_response["properties"]["sn_1"], "SN1")
+
 
 class ProxySensorCompatibilityTests(unittest.TestCase):
+    def test_get_cache_config_defaults_and_overrides_are_loaded(self) -> None:
+        default_cfg = Config(device_ips=[])
+        self.assertEqual(default_cfg.zendure_request_timeout, 60.0)
+        self.assertEqual(default_cfg.ha_get_response_timeout, 8.0)
+        self.assertEqual(default_cfg.get_cache_max_age, 300.0)
+        self.assertEqual(default_cfg.get_rate_limit_window, 1.0)
+        self.assertEqual(default_cfg.get_recovery_window, 30.0)
+        self.assertEqual(default_cfg.degraded_power_hold_seconds, 1800.0)
+
     def test_proxy_sensor_builder_ignores_non_string_battery_order(self) -> None:
         class TaskLike:
             pass
@@ -205,6 +283,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Opladen")
         self.assertEqual(sensors["sensor.zendure_2_relais_stand"][0], "Oplaadstand")
         self.assertEqual(sensors["sensor.dual_mode_demper_status"][0], "Aan")
+        self.assertEqual(sensors["sensor.proxy_zendure_pool_healthy"][0], "Healthy")
 
     def test_proxy_sensor_builder_publishes_per_device_modes(self) -> None:
         results = [
@@ -466,6 +545,175 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(proxy._state.devices[0].latest_power_cmd_zero_ts, 0.0)
         self.assertGreater(proxy._state.devices[1].latest_power_cmd_zero_ts, 0)
 
+    def test_health_recovery_window_controls_eligible_devices(self) -> None:
+        cfg = Config(device_ips=["ip1", "ip2"], get_cache_max_age=300.0)
+        state = ProxyState(
+            device_count=2,
+            devices=[DeviceState(ip="ip1"), DeviceState(ip="ip2")],
+            startup_ts=100.0,
+        )
+
+        self.assertEqual(eligible_device_indices(state, cfg, current_ts=120.0), [0, 1])
+        self.assertEqual(eligible_device_indices(state, cfg, current_ts=401.0), [0, 1])
+
+        record_get_results(
+            state,
+            cfg,
+            [_device(1, "SN1"), None],
+            current_ts=402.0,
+        )
+        self.assertEqual(eligible_device_indices(state, cfg, current_ts=422.0), [0])
+        self.assertEqual(eligible_device_indices(state, cfg, current_ts=432.0), [0])
+
+        record_get_results(state, cfg, [_device(1, "SN1"), None], current_ts=433.0)
+        self.assertEqual(state.devices[1].recovery_started_ts, 0.0)
+
+    def test_degraded_device_becomes_dead_after_power_hold_window(self) -> None:
+        cfg = Config(
+            device_ips=["ip1"],
+            degraded_power_hold_seconds=1800.0,
+        )
+        state = ProxyState(
+            device_count=1,
+            devices=[
+                DeviceState(
+                    ip="ip1",
+                    sn="SN1",
+                    last_response=_device(1, "SN1", input_limit=500),
+                    last_successful_get_ts=100.0,
+                    excluded_since_ts=200.0,
+                )
+            ],
+            startup_ts=1.0,
+        )
+
+        self.assertEqual(degraded_power_by_index(state, cfg, current_ts=500.0), {0: 500})
+        summary = health_summary(state, cfg, current_ts=2001.0)
+
+        self.assertEqual(degraded_power_by_index(state, cfg, current_ts=2001.0), {})
+        self.assertEqual(summary["deadCount"], 1)
+        self.assertEqual(summary["deadDevices"][0]["serialNumber"], "SN1")
+
+    def test_proxy_health_sensors_report_degraded_pool_and_unavailable_slot(self) -> None:
+        response = {
+            "proxyVersion": "test",
+            "packData": [],
+            "properties": {
+                "sn_1": "SN1",
+                "sn_2": "SN2",
+                "ipAddress_1": "ip1",
+                "ipAddress_2": "ip2",
+                "electricLevel_2": "unavailable",
+                "latestPowerCmd_2": "unavailable",
+            },
+            "proxyHealth": {
+                "configuredCount": 2,
+                "healthyCount": 1,
+                "unhealthyCount": 1,
+                "excludedCount": 1,
+                "recoveringCount": 0,
+                "unhealthyDevices": [
+                    {
+                        "slot": 2,
+                        "serialNumber": "SN2",
+                        "ipAddress": "ip2",
+                        "lastSuccessfulGetAgeSeconds": 301.0,
+                        "lastGetError": "GET returned no response",
+                        "recoverySecondsRemaining": 0.0,
+                    }
+                ],
+                "excludedDevices": [
+                    {
+                        "slot": 2,
+                        "serialNumber": "SN2",
+                        "ipAddress": "ip2",
+                        "lastSuccessfulGetAgeSeconds": 301.0,
+                        "lastGetError": "GET returned no response",
+                        "recoverySecondsRemaining": 0.0,
+                    }
+                ],
+                "recoveringDevices": [],
+            },
+        }
+
+        sensors = build_proxy_ha_sensors(response)
+
+        self.assertEqual(sensors["sensor.zendure_2_health"][0], "Degraded")
+        self.assertEqual(sensors["sensor.zendure_2_laadpercentage"][0], "unavailable")
+        self.assertEqual(sensors["sensor.zendure_2_serienummer"][0], "SN2")
+        self.assertEqual(sensors["sensor.proxy_zendure_pool_healthy"][0], "Degraded")
+
+    def test_post_skips_excluded_device_until_recovery_window_finishes(self) -> None:
+        cfg = Config(
+            device_ips=["ip1", "ip2", "ip3"],
+            get_cache_max_age=300.0,
+            get_recovery_window=30.0,
+            degraded_power_hold_seconds=999999999.0,
+        )
+        state = ProxyState(
+            device_count=3,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1", electric_level=50),
+                DeviceState(
+                    ip="ip2",
+                    sn="SN2",
+                    electric_level=50,
+                    last_response=_device(2, "SN2", input_limit=500),
+                    last_successful_get_ts=50.0,
+                    excluded_since_ts=100.0,
+                    recovery_started_ts=0.0,
+                ),
+                DeviceState(ip="ip3", sn="SN3", electric_level=50),
+            ],
+            max_power_in=800,
+            ac_mode=1,
+            startup_ts=1.0,
+        )
+        clients = [_FakeClient() for _idx in range(3)]
+
+        asyncio.run(
+            execute_post(
+                {"properties": {"acMode": 1, "inputLimit": 1600}},
+                clients,
+                state,
+                cfg,
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        self.assertGreaterEqual(len(clients[0].posts), 1)
+        self.assertEqual(len(clients[1].posts), 0)
+        self.assertGreaterEqual(len(clients[2].posts), 1)
+        client_1_power_posts = [
+            post for post in clients[0].posts
+            if "inputLimit" in post["properties"]
+        ]
+        client_3_power_posts = [
+            post for post in clients[2].posts
+            if "inputLimit" in post["properties"]
+        ]
+        self.assertEqual(client_1_power_posts[0]["properties"]["inputLimit"], 550)
+        self.assertEqual(client_3_power_posts[0]["properties"]["inputLimit"], 550)
+        self.assertEqual(state.devices[1].latest_power_cmd, 500)
+
+        state.devices[1].recovery_started_ts = 1.0
+        clients = [_FakeClient() for _idx in range(3)]
+        asyncio.run(
+            execute_post(
+                {"properties": {"acMode": 1, "inputLimit": 2400}},
+                clients,
+                state,
+                Config(
+                    device_ips=["ip1", "ip2", "ip3"],
+                    get_cache_max_age=300.0,
+                    get_recovery_window=0.0,
+                ),
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        self.assertEqual([len(client.posts) for client in clients], [1, 1, 1])
+
 
 def _combined_three_device_response() -> dict:
     results = [_device(1, "SN1"), _device(2, "SN2"), _device(3, "SN3")]
@@ -511,6 +759,55 @@ class _FakeClient:
     async def post(self, payload: dict) -> dict:
         self.posts.append(payload)
         return {"ack": "pong"}
+
+
+class _DelayedGetClient:
+    def __init__(self, response: dict):
+        self._response = response
+        self._event = asyncio.Event()
+
+    async def get(self) -> dict:
+        await self._event.wait()
+        return self._response
+
+    def release(self) -> None:
+        self._event.set()
+
+
+class _NeverResolvingQueue:
+    async def enqueue_get(self):
+        return asyncio.get_running_loop().create_future()
+
+    async def depths(self):
+        return 1, 0
+
+
+class _FakeMetrics:
+    def start_incoming(self, _method: str) -> None:
+        return None
+
+    def finish_incoming(
+        self,
+        _method: str,
+        _duration_ms: float,
+        _status: int,
+        _timeout: bool,
+    ) -> None:
+        return None
+
+    def record_queue_batch(self, **_kwargs) -> None:
+        return None
+
+    def set_incoming_queue_depth(self, _get_depth: int, _post_depth: int) -> None:
+        return None
+
+
+async def _noop_publish(_response: dict) -> None:
+    return None
+
+
+async def _noop_record_depths() -> None:
+    return None
 
 
 def _device(

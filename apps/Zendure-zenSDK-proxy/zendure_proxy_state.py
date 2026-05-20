@@ -24,6 +24,13 @@ class DeviceState:
     latest_power_cmd: int = 0      # Last power command (W) sent to this device
     latest_power_cmd_zero_ts: float = 0.0
     last_response: Optional[dict] = None
+    last_successful_get_ts: float = 0.0
+    last_failed_get_ts: float = 0.0
+    last_get_error: str = ""
+    recovery_started_ts: float = 0.0
+    excluded_since_ts: float = 0.0
+    dead_since_ts: float = 0.0
+    latest_get_included: bool = True
     standby_task: Optional[asyncio.Task] = None
     standby_device: bool = False
 
@@ -84,6 +91,9 @@ class ProxyState:
     counter_post_received: int = 0
     counter_post_replies: int = 0
     counter_missing: list[int] = field(default_factory=lambda: [0, 0, 0])
+    startup_ts: float = 0.0
+    last_ha_get_ts: float = 0.0
+    get_refresh_in_progress: bool = False
     latest_get_ts: float = 0.0
     latest_power_message_ts: float = 0.0
     latest_power_repeat_ts: float = 0.0

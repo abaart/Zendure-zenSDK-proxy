@@ -42,6 +42,59 @@ plaats van een grote Node-RED JSON export op één regel.
 De Node-RED bestanden, de documentatie over de originele proxy-aanpak, en de
 Home Assistant voorbeelden blijven afkomstig van de upstream repository van
 `gast777`, behalve waar deze fork expliciet AppDaemon/HACS documentatie toevoegt.
+De Node-RED implementatie blijft ongewijzigd in deze repository.
+
+## Robuust omgaan met uitval van Zendures
+
+De originele Node-RED versie van `gast777` blijft de basis voor de proxy-aanpak:
+meerdere fysieke Zendures worden zichtbaar als één virtuele Zendure voor Gielz
+en Home Assistant. De AppDaemon/Python versie in `apps/Zendure-zenSDK-proxy/`
+voegt extra gedrag toe voor situaties waarin één fysieke Zendure traag wordt of
+niet meer antwoordt.
+
+In gewone taal:
+
+- Home Assistant REST calls stoppen vaak na ongeveer 10 seconden. De AppDaemon
+  versie probeert daarom binnen `ha_get_response_timeout`, standaard 8 seconden,
+  een antwoord aan Home Assistant te geven.
+- Een trage Zendure request wordt intern niet meteen afgebroken. `DeviceClient`
+  gebruikt `zendure_request_timeout`, standaard 60 seconden. Als de Zendure later
+  alsnog antwoordt, schrijft de proxy die response naar de cache.
+- Als Home Assistant eerder antwoord nodig heeft, stuurt de proxy de laatste
+  bekende goede GET response terug zolang `get_cache_max_age`, standaard 300
+  seconden, nog niet verlopen is.
+  Daardoor blijft de proxy response bruikbaar in Home Assistant bij een korte
+  vertraging of korte uitval van één Zendure, in plaats van dat de volledige
+  proxy response meteen `unavailable` wordt.
+- `sensor.proxy_zendure_pool_healthy` is `Healthy` wanneer alle geconfigureerde
+  Zendures normaal antwoorden. De sensor is `Degraded` wanneer één of meer
+  Zendures niet goed antwoorden.
+- `sensor.zendure_1_health`, `sensor.zendure_2_health`, en
+  `sensor.zendure_3_health` tonen per Zendure `Healthy`, `Degraded`, of `Dead`.
+- Een Zendure wordt `Degraded` wanneer een outgoing GET naar die Zendure geen
+  bruikbare response oplevert. Voorbeelden zijn: geen antwoord binnen
+  `zendure_request_timeout`, standaard 60 seconden, een verbroken verbinding,
+  een HTTP fout, of een response die de proxy niet kan verwerken.
+- Een `Degraded` Zendure krijgt geen POST opdrachten meer. De proxy gaat er
+  tijdelijk wel vanuit dat die Zendure blijft laden of ontladen met het wattage
+  uit de laatste succesvolle GET response. Daardoor kan de proxy het resterende
+  gevraagde wattage naar de gezonde Zendures sturen.
+  Het overslaan van POST opdrachten naar een `Degraded` Zendure ontlast die
+  Zendure, zodat herstel meer kans krijgt. Het overslaan voorkomt ook dat oude
+  POST opdrachten voor die Zendure opstapelen terwijl de verbinding slecht is.
+- `degraded_power_hold_seconds`, standaard 1800 seconden, bepaalt hoe lang de
+  proxy die laatste bekende stand meetelt. Na die periode wordt de Zendure
+  `Dead`, en de proxy gaat er dan vanuit dat die Zendure geen vermogen meer
+  levert of opneemt.
+- Wanneer een uitgevallen Zendure weer succesvolle GET responses geeft, wacht de
+  proxy `get_recovery_window`, standaard 30 seconden, voordat die Zendure weer
+  POST opdrachten krijgt.
+
+Voorbeeld: Home Assistant vraagt 1600 W laden. Zendure 2 is `Degraded`, en de
+laatste succesvolle GET response meldde dat Zendure 2 nog met 500 W laadt. De
+proxy stuurt dan geen POST naar Zendure 2. De proxy verdeelt de resterende
+1100 W over Zendure 1 en Zendure 3, zodat de totale aansturing zo dicht mogelijk
+bij 1600 W blijft.
 
 ## AppDaemon via HACS
 
@@ -91,7 +144,12 @@ zendure_proxy:
 
   server_host: "0.0.0.0"
   server_port: 8120
-  zendure_request_timeout: 15
+  zendure_request_timeout: 60
+  ha_get_response_timeout: 8
+  get_cache_max_age: 300
+  get_rate_limit_window: 1
+  get_recovery_window: 30
+  degraded_power_hold_seconds: 1800
 
   single_mode_upperlimit_percent: 100
   single_mode_lowerlimit_percent: 40
@@ -209,6 +267,34 @@ POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
 ```
 
 De oude URLs op `8120` blijven bestaan voor installaties waarin de caller de AppDaemon containerpoort direct kan bereiken.
+
+### Pushmelding bij degraded pool
+
+Het is aan te raden om in Home Assistant een automation te maken die een push
+message stuurt wanneer `sensor.proxy_zendure_pool_healthy` naar `Degraded` gaat.
+Die melding geeft je de kans om de fysieke Zendure, het IP-adres, Wi-Fi, of de
+stroomvoorziening te controleren voordat de proxy de Zendure als `Dead`
+behandelt.
+
+Voorbeeld:
+
+```yaml
+alias: Zendure pool degraded melding
+mode: single
+trigger:
+  - platform: state
+    entity_id: sensor.proxy_zendure_pool_healthy
+    to: "Degraded"
+    for: "00:01:00"
+action:
+  - service: notify.mobile_app_jouw_telefoon
+    data:
+      title: "Zendure proxy degraded"
+      message: >
+        Een of meer Zendures reageren niet goed. Controleer
+        sensor.zendure_1_health, sensor.zendure_2_health, en
+        sensor.zendure_3_health in Home Assistant.
+```
 
 ### Logging
 

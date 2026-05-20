@@ -47,7 +47,7 @@ class DeviceClient:
         logger: Callable,
         metrics=None,
         device_idx: int = 0,
-        request_timeout: float = 15.0,
+        request_timeout: float = 60.0,
     ):
         self.ip = ip
         self._log = logger

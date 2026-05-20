@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Callable
 
+from zendure_proxy_health import eligible_device_indices
 from zendure_proxy_power import now
 
 if TYPE_CHECKING:
@@ -29,10 +30,17 @@ async def manage_standby(
       * Active   → cancel any pending standby task; wake device if asleep.
       * Inactive → schedule a delayed standby if the mode warrants it.
     """
-    active_set = set(state.devices_active_idx)
+    eligible = eligible_device_indices(state, cfg)
+    eligible_set = set(eligible)
+    active_set = set(state.devices_active_idx) & eligible_set
     devs = state.devices
 
     for i, dev in enumerate(devs):
+        if i not in eligible_set:
+            if dev.standby_task and not dev.standby_task.done():
+                dev.standby_task.cancel()
+            dev.standby_task = None
+            continue
         if i in active_set:
             if dev.standby_task and not dev.standby_task.done():
                 dev.standby_task.cancel()
@@ -44,7 +52,7 @@ async def manage_standby(
                 dev.smart_mode = 1
             dev.standby_device = False
         else:
-            should_standby = state.device_active_count < state.device_count and (
+            should_standby = state.device_active_count < len(eligible) and (
                 (ac_mode == 1 and cfg.standby_charging)
                 or (ac_mode == 2 and cfg.standby_discharging)
             )
@@ -110,7 +118,10 @@ async def _delayed_standby(
 
 
 def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
-    if state.device_count < 2:
+    eligible = eligible_device_indices(state, cfg)
+    if len(eligible) < 2:
+        return False
+    if idx not in eligible:
         return False
     if idx in state.devices_active_idx:
         return False
@@ -130,9 +141,12 @@ def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
     stale_get = state.latest_get_ts <= 0 or now_ts - state.latest_get_ts > 10
     zero_power = state.latest_power_cmd == 0
     charging_diff_guard = (
-        state.device_count == 2
+        len(eligible) == 2
         and state.latest_power_cmd > 0
-        and abs(state.devices[0].electric_level - state.devices[1].electric_level)
+        and abs(
+            state.devices[eligible[0]].electric_level
+            - state.devices[eligible[1]].electric_level
+        )
         < cfg.device_change_diff
     )
     direction_enabled = (
@@ -140,7 +154,7 @@ def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
         or (state.latest_power_cmd < 0 and cfg.standby_discharging)
     )
     return (
-        state.device_active_count < state.device_count
+        state.device_active_count < len(eligible)
         and direction_enabled
         and not transition_recent
         and not stale_get

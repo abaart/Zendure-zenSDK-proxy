@@ -12,6 +12,7 @@ from typing import Callable
 
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
+from zendure_proxy_health import degraded_power_by_index, eligible_device_indices
 from zendure_proxy_power import apply_transition, calc_active_count, distribute_power, now
 from zendure_proxy_standby import manage_standby
 from zendure_proxy_state import ProxyState
@@ -39,6 +40,9 @@ async def execute_post(
     props = dict(payload.get("properties") or {})
     n = state.device_count
     devs = state.devices
+    eligible = eligible_device_indices(state, cfg)
+    eligible_set = set(eligible)
+    degraded_power = degraded_power_by_index(state, cfg)
     runtime_key = _first_runtime_mode_key(props)
     if runtime_key is not None:
         _apply_runtime_mode_prop(runtime_key, props[runtime_key], state)
@@ -63,11 +67,13 @@ async def execute_post(
             state.ac_mode = _int(device_props["acMode"])
 
         outbound_props = dict(device_props)
-        _apply_aggregate_limit_props(outbound_props, state, devs, n)
+        _apply_aggregate_limit_props(outbound_props, state, devs, eligible)
         smart_mode_before = [dev.smart_mode for dev in devs]
 
         responses = []
         for i, client in enumerate(clients):
+            if i not in eligible_set:
+                continue
             if _suppress_standby_post(devs[i], outbound_props):
                 continue
             dp = (
@@ -80,7 +86,7 @@ async def execute_post(
                 devs[i].smart_mode = _int(outbound_props["smartMode"])
 
         if _int(outbound_props.get("smartMode", -1), -1) == 1:
-            passive = set(range(n)) - set(state.devices_active_idx)
+            passive = eligible_set - set(state.devices_active_idx)
             stamp = now()
             for idx in passive:
                 if (
@@ -116,8 +122,8 @@ async def execute_post(
         output_limit = 0
 
     command_power = input_limit if ac_mode == 1 else (output_limit if ac_mode == 2 else 0)
-    distribution_power = command_power
     latest_power_cmd = _signed_power_cmd(ac_mode, command_power)
+    distribution_power = _residual_power_for_healthy(latest_power_cmd, degraded_power)
 
     max_power = (state.max_power_in if ac_mode == 1 else state.max_power_out) or 800
 
@@ -134,7 +140,7 @@ async def execute_post(
         not invalid_direction
         and (cfg.damper_enable or state.dualmode_damper_enabled)
         and ac_mode == 2
-        and n >= 2
+        and len(eligible) >= 2
         and state.latest_power_cmd != 0
     ):
         distribution_power = _apply_single_mode_damper(
@@ -147,6 +153,7 @@ async def execute_post(
         state.device_active_count = calc_active_count(
             state, ac_mode, distribution_power, upper, lower, force_all,
             cfg.device_change_diff,
+            eligible_indices=eligible,
         )
 
     # ── Which specific devices are active? ────────────────────────────────────
@@ -156,11 +163,13 @@ async def execute_post(
         _select_active_devices(
             state, ac_mode, cfg,
             previous_active_count=previous_active_count,
+            eligible_indices=eligible,
         )
 
     if (
         state.device_active_count > 1
         and previous_active_count == 1
+        and prev_active_device in eligible_set
         and state.single_to_dual_transition_start_ts <= 0
         and state.forced_dual_transition_start_ts <= 0
         and any(dev.latest_power_cmd != 0 for dev in devs)
@@ -171,17 +180,18 @@ async def execute_post(
     if (
         state.device_active_count == 1
         and state.single_mode_active_device != prev_active_device
+        and prev_active_device in eligible_set
         and previous_active_count == 1
         and not (
-            (ac_mode == 1 and any(dev.soc_limit == 1 for dev in devs))
-            or (ac_mode == 2 and any(dev.soc_limit == 2 for dev in devs))
+            (ac_mode == 1 and any(devs[idx].soc_limit == 1 for idx in eligible))
+            or (ac_mode == 2 and any(devs[idx].soc_limit == 2 for idx in eligible))
         )
     ):
         state.transition_start_ts = now_ts
         state.transition_original_device = prev_active_device
         state.forced_dual_transition_start_ts = now_ts
         state.forced_dual_transition_original_device = prev_active_device
-        state.device_active_count = min(2, n)
+        state.device_active_count = min(2, len(eligible))
         state.devices_active_idx = sorted(
             {prev_active_device, state.single_mode_active_device}
         )
@@ -196,11 +206,16 @@ async def execute_post(
         per_device = apply_transition(per_device, state, now_ts, cfg.transition_timer)
 
     outbound_props = dict(props)
-    _apply_aggregate_limit_props(outbound_props, state, devs, n)
+    _apply_aggregate_limit_props(outbound_props, state, devs, eligible)
 
     # ── Send commands to all devices in parallel ───────────────────────────────
     tasks = []
     for i, client in enumerate(clients):
+        if i not in eligible_set:
+            stuck_power = degraded_power.get(i, 0)
+            devs[i].latest_power_cmd = stuck_power
+            devs[i].latest_power_cmd_zero_ts = now_ts if stuck_power == 0 else 0.0
+            continue
         pwr = per_device[i]
         wake_standby_device = (
             not invalid_direction
@@ -248,10 +263,10 @@ async def execute_post(
     state.latest_power_cmd = latest_power_cmd
     if ac_mode == 1:
         state.input_limit = input_limit
-        state.input_limit_effective = sum(per_device)
+        state.input_limit_effective = _effective_input_power(per_device, degraded_power)
     elif ac_mode == 2:
         state.output_limit = output_limit
-        state.output_limit_effective = sum(per_device)
+        state.output_limit_effective = _effective_output_power(per_device, degraded_power)
     if not is_repeat:
         state.last_post_payload = payload
 
@@ -290,8 +305,9 @@ def _apply_aggregate_limit_props(
     props: dict,
     state: ProxyState,
     devs: list,
-    n: int,
+    eligible: list[int],
 ) -> None:
+    n = len(eligible)
     if n <= 0:
         return
     if "chargeMaxLimit" in props:
@@ -300,8 +316,8 @@ def _apply_aggregate_limit_props(
         state.charge_max_limit_cmd = command
         state.charge_max_limit_effective = per * n
         props["chargeMaxLimit"] = per
-        for dev in devs:
-            dev.charge_max_limit = per
+        for idx in eligible:
+            devs[idx].charge_max_limit = per
         state.max_power_in = per
     if "inverseMaxPower" in props:
         command = _int(props["inverseMaxPower"])
@@ -309,8 +325,8 @@ def _apply_aggregate_limit_props(
         state.inverse_max_power_cmd = command
         state.inverse_max_power_effective = per * n
         props["inverseMaxPower"] = per
-        for dev in devs:
-            dev.inverse_max_power = per
+        for idx in eligible:
+            devs[idx].inverse_max_power = per
         state.max_power_out = per
 
 
@@ -379,6 +395,28 @@ def _signed_power_cmd(ac_mode: int, power: int) -> int:
     return 0
 
 
+def _residual_power_for_healthy(
+    requested_power: int,
+    degraded_power: dict[int, int],
+) -> int:
+    residual = requested_power - sum(degraded_power.values())
+    if requested_power > 0:
+        return max(0, residual)
+    if requested_power < 0:
+        return max(0, -residual)
+    return 0
+
+
+def _effective_input_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
+    degraded_input = sum(power for power in degraded_power.values() if power > 0)
+    return sum(per_device) + degraded_input
+
+
+def _effective_output_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
+    degraded_output = sum(-power for power in degraded_power.values() if power < 0)
+    return sum(per_device) + degraded_output
+
+
 def _suppress_standby_post(dev, props: dict) -> bool:
     if not getattr(dev, "standby_device", False):
         return False
@@ -402,50 +440,67 @@ def _select_active_devices(
     cfg: Config,
     *,
     previous_active_count: int | None = None,
+    eligible_indices: list[int] | None = None,
 ) -> None:
     """Choose which specific device indices are active based on SoC."""
     devs = state.devices
-    n = state.device_count
-    active_count = state.device_active_count
+    eligible = (
+        eligible_indices
+        if eligible_indices is not None
+        else list(range(state.device_count))
+    )
+    n = len(eligible)
+    if n <= 0:
+        state.devices_active_idx_previous = list(state.devices_active_idx)
+        state.devices_active_idx = []
+        state.device_active_count = 0
+        return
+    active_count = min(state.device_active_count, n)
+    state.device_active_count = active_count
     min_soc_pct = state.min_soc / 10.0
 
     # Tighten hysteresis threshold near SoC boundaries
     diff_threshold = cfg.device_change_diff
-    at_boundary = any(d.soc_limit == 2 for d in devs) and any(
-        d.electric_level < min_soc_pct for d in devs
+    at_boundary = any(devs[i].soc_limit == 2 for i in eligible) and any(
+        devs[i].electric_level < min_soc_pct for i in eligible
     )
-    if at_boundary or any(d.soc_limit == 1 for d in devs):
+    if at_boundary or any(devs[i].soc_limit == 1 for i in eligible):
         diff_threshold = 1
 
     if active_count >= n:
         state.devices_active_idx_previous = list(state.devices_active_idx)
-        state.devices_active_idx = list(range(n))
+        state.devices_active_idx = list(eligible)
         return
 
-    previous = list(state.devices_active_idx)
+    previous = [idx for idx in state.devices_active_idx if idx in eligible]
 
     # Rank by SoC: lowest first for charging, highest first for discharging
     ranked = sorted(
-        range(n),
+        eligible,
         key=lambda i: devs[i].electric_level,
         reverse=(ac_mode == 2),
     )
 
     if active_count == 1:
-        if n == 2 and ac_mode == 1 and sum(d.soc_limit == 1 for d in devs[:2]) == 1:
-            best = 0 if devs[0].soc_limit != 1 else 1
+        if n == 2 and ac_mode == 1 and sum(devs[i].soc_limit == 1 for i in eligible) == 1:
+            first, second = eligible
+            best = first if devs[first].soc_limit != 1 else second
             state.single_mode_active_device = best
-        elif n == 2 and ac_mode == 2 and sum(d.soc_limit == 2 for d in devs[:2]) == 1:
-            best = 0 if devs[0].soc_limit != 2 else 1
+        elif n == 2 and ac_mode == 2 and sum(devs[i].soc_limit == 2 for i in eligible) == 1:
+            first, second = eligible
+            best = first if devs[first].soc_limit != 2 else second
             state.single_mode_active_device = best
         else:
             best = ranked[0]
             current = state.single_mode_active_device
+            if current not in eligible:
+                current = best
+                state.single_mode_active_device = best
             force_reselect = (
                 previous_active_count is not None
                 and previous_active_count != active_count
             ) or (
-                n == 2 and all(d.smart_mode == 0 for d in devs[:2])
+                n == 2 and all(devs[i].smart_mode == 0 for i in eligible)
             )
             if (
                 abs(devs[best].electric_level - devs[current].electric_level)
@@ -456,12 +511,11 @@ def _select_active_devices(
         state.devices_active_idx = [state.single_mode_active_device]
     else:
         if n == 3:
-            soc_values = [dev.electric_level for dev in devs]
+            soc_values = [devs[i].electric_level for i in eligible]
             soc_diff = max(soc_values) - min(soc_values)
             should_reselect = (
                 soc_diff >= diff_threshold
                 or active_count != len(previous)
-                or n != len(devs)
                 or len(previous) != active_count
             )
             if should_reselect:

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zendure_proxy_state import ProxyState
 
-PROXY_VERSION = "20260520-ad5"
+PROXY_VERSION = "20260520-ad6"
 
 
 def now() -> float:
@@ -101,16 +101,21 @@ def calc_active_count(
     lower: float,
     force_all: bool,
     device_change_diff: int = 5,
+    eligible_indices: list[int] | None = None,
 ) -> int:
     """
     Decide how many devices should be active based on power level and SoC state.
 
     Uses hysteresis (prev count) to avoid rapid mode oscillation.
     """
-    n = state.device_count
-    devs = state.devices
+    indices = eligible_indices if eligible_indices is not None else list(range(state.device_count))
+    n = len(indices)
+    devs = [state.devices[idx] for idx in indices]
     min_soc_pct = state.min_soc / 10.0
-    prev = state.device_active_count
+    prev = min(state.device_active_count, max(n, 1))
+
+    if n <= 0:
+        return 0
 
     if force_all or n == 1:
         return n

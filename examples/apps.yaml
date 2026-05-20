@@ -24,8 +24,22 @@ zendure_proxy:
   server_host: "0.0.0.0"
 
   # Timeout in seconds for each HTTP request from AppDaemon to a Zendure device.
-  # The default keeps the previous Python behavior.
-  zendure_request_timeout: 15
+  # This can be higher than Home Assistant's REST timeout because the proxy can
+  # answer HA from cache while the Zendure request continues internally.
+  zendure_request_timeout: 60
+
+  # GET cache and health behavior.
+  # Home Assistant receives a cached GET response after ha_get_response_timeout.
+  # The proxy keeps using cached device data for get_cache_max_age seconds.
+  # A recovered device must have successful outgoing GET requests for
+  # get_recovery_window seconds before it is used for power distribution again.
+  # A degraded device's last measured power is counted for
+  # degraded_power_hold_seconds seconds before the device is treated as dead.
+  ha_get_response_timeout: 8
+  get_cache_max_age: 300
+  get_rate_limit_window: 1
+  get_recovery_window: 30
+  degraded_power_hold_seconds: 1800
 
   # Mode-switching thresholds.
   # Above single_mode_upperlimit_percent * maxPower, switch to multi-device mode.
