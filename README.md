@@ -8,7 +8,6 @@ Deze repo is op dit moment experimenteel. Bijdrages (ook door middel van testen)
 
 ## Inhoud
 
-- [AppDaemon/Python in het kort](#appdaemonpython-in-het-kort)
 - [Credits, upstream en wijzigingen](#credits-upstream-en-wijzigingen)
 - [Robuust omgaan met uitval van Zendures](#robuust-omgaan-met-uitval-van-zendures)
 - [AppDaemon via HACS](#appdaemon-via-hacs)
@@ -23,49 +22,6 @@ Deze repo is op dit moment experimenteel. Bijdrages (ook door middel van testen)
   - [Overstappen van Node-RED naar AppDaemon](#overstappen-van-node-red-naar-appdaemon)
   - [Release naar HACS](#release-naar-hacs)
 - [Bewust verschil met Node-RED bij drie Zendures](#bewust-verschil-met-node-red-bij-drie-zendures)
-
-## AppDaemon/Python in het kort
-
-De AppDaemon/Python versie is vooral bedoeld om korte haperingen tussen Home
-Assistant en Zendure devices niet direct als foutstatus in Home Assistant te
-tonen. `ZendureProxy._execute_report_request(...)` kan een cached response
-teruggeven, `RequestQueue` kan GET requests bundelen, en `RequestQueue` kan oude
-POST opdrachten overslaan wanneer Home Assistant al een nieuwere opdracht heeft
-gestuurd. Voorbeelden van zulke haperingen zijn een wissel tussen laden en
-ontladen, interne cronjobs op de Zendure, kortstondige packetloss, of vertraging
-in de draadloze Wi-Fi verbinding van de Zendures.
-
-`RequestQueue` in `zendure_proxy_queue.py` bundelt gelijktijdige GET requests.
-Als meerdere Home Assistant sensors, dashboards, of automations tegelijk
-`/properties/report` opvragen, voert de proxy één upstream GET ronde uit en
-krijgen alle wachtende Home Assistant requests hetzelfde antwoord. Daardoor
-ontstaat bij een korte Zendure hapering geen stapel bijna gelijke GET requests.
-
-`RequestQueue` bewaart bij wachtende POST requests met dezelfde property keys
-alleen de nieuwste payload. Voorbeeld: Home Assistant stuurt kort na elkaar drie
-vermogensopdrachten met `inputLimit`. De proxy stuurt alleen de laatste
-`inputLimit` payload naar de Zendure devices en geeft de oudere wachtende POST
-requests direct `{"ack":"pong"}` terug. Daardoor worden oude vermogensopdrachten
-niet alsnog uitgevoerd nadat een Zendure net traag was.
-
-Elke fysieke Zendure heeft via `DeviceClient` in
-`zendure_proxy_device_client.py` een eigen uitgaande queue. `DeviceClient` stuurt
-maximaal één HTTP request tegelijk naar hetzelfde Zendure IP-adres. Een Zendure
-krijgt daardoor geen overlappende GET en POST requests wanneer de Wi-Fi
-verbinding even vertraagt.
-
-Wanneer een Zendure tijdelijk geen bruikbare GET response geeft, gebruikt
-`zendure_proxy_health.py` de laatste succesvolle GET response zolang
-`get_cache_max_age` nog niet is verlopen. `execute_post(...)` in
-`zendure_proxy_post_handler.py` stuurt geen POST opdrachten naar een `Degraded`
-Zendure en verdeelt het resterende wattage over de gezonde Zendures. Bij één
-Zendure geeft de cache-logica Home Assistant meestal nog een bruikbare response
-in plaats van direct `unavailable`.
-
-Het doel is graceful handling: Home Assistant krijgt binnen
-`ha_get_response_timeout` een antwoord, late Zendure responses worden alsnog in
-de cache verwerkt, en `get_recovery_window` voorkomt dat POST opdrachten direct
-terugkomen zodra een Zendure één keer antwoordt na een storing.
 
 ## Credits, upstream en wijzigingen
 
