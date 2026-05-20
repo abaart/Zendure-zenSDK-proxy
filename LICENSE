@@ -2,6 +2,38 @@
 Zendure zenSDK Proxy - Zendure-zenSDK-proxy (gast777)
 Copyright (c) 2026 Casper Rijnders
 
+Modification notice for abaart/Zendure-zenSDK-proxy:
+
+This fork adds an AppDaemon/Python implementation in
+apps/Zendure-zenSDK-proxy/ while preserving the original Node-RED proxy
+materials from gast777/Zendure-zenSDK-proxy.
+
+The AppDaemon/Python implementation adds these project files:
+
+- apps/Zendure-zenSDK-proxy/zendure_proxy.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_config.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_device_client.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_get_handler.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_logging.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_metrics.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_post_handler.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_power.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_queue.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_standby.py
+- apps/Zendure-zenSDK-proxy/zendure_proxy_state.py
+- examples/apps.yaml
+- hacs.json
+
+The AppDaemon/Python implementation has three concrete goals:
+
+- HACS installs and updates the AppDaemon app from this repository, so users do
+  not need to import a Node-RED JSON export manually for the AppDaemon version.
+- RequestQueue in zendure_proxy_queue.py and DeviceClient in
+  zendure_proxy_device_client.py serialize and coalesce HTTP requests, so Zendure
+  devices receive fewer simultaneous requests in edge-case situations.
+- The Python modules in apps/Zendure-zenSDK-proxy/ make GitHub review and
+  contribution easier than reviewing a single-line Node-RED JSON export.
+
 All rights reserved.
 
 1. Permission for Non-Commercial Use

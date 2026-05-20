@@ -1,5 +1,48 @@
 # Zendure-zenSDK-proxy
 
+> Credit: deze AppDaemon versie bouwt voort op de originele
+> [`Zendure-zenSDK-proxy`](https://github.com/gast777/Zendure-zenSDK-proxy)
+> van Casper Rijnders / `gast777`.
+
+## Credits, upstream en wijzigingen
+
+Deze repository is gebaseerd op de originele
+[`gast777/Zendure-zenSDK-proxy`](https://github.com/gast777/Zendure-zenSDK-proxy)
+van Casper Rijnders.
+
+De originele repository levert een Node-RED proxy voor Gielz/Home Assistant en
+Zendure devices. Die Node-RED proxy verzorgt de interfacing naar meerdere
+Zendure devices, combineert de status naar een virtueel device, verdeelt laad-
+en ontlaadvermogen, en voegt extra monitoring-attributen toe voor Home
+Assistant.
+
+Deze fork voegt een AppDaemon/Python implementatie toe:
+
+- `apps/Zendure-zenSDK-proxy/zendure_proxy.py` start de AppDaemon app en de HTTP endpoints.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_get_handler.py` bouwt het gecombineerde GET antwoord.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_post_handler.py` splitst POST opdrachten per Zendure device.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_power.py` berekent actieve devices en vermogensverdeling.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_queue.py` verwerkt gelijktijdige GET/POST requests.
+- `hacs.json` en `examples/apps.yaml` maken installatie als AppDaemon app via HACS mogelijk.
+
+Dank aan `gast777` voor het uitzoeken van de Zendure-interfacing, de
+proxy-aanpak, de vermogensverdeling, de monitoring-attributen, de Home Assistant
+voorbeelden, en de vele praktijktests waarop deze AppDaemon versie voortbouwt.
+
+De AppDaemon/Python implementatie heeft drie concrete doelen. HACS moet updates
+voor eindgebruikers makkelijker maken, omdat Home Assistant de AppDaemon app uit
+een release of branch kan installeren zonder handmatig een Node-RED export te
+importeren. `RequestQueue` in `zendure_proxy_queue.py` en de per-device queues in
+`DeviceClient` in `zendure_proxy_device_client.py` moeten Zendure devices
+beschermen tegen te veel gelijktijdige HTTP requests in edge-case situaties. De
+Python bestanden in `apps/Zendure-zenSDK-proxy/` moeten GitHub bijdragen
+makkelijker maken, omdat reviewers normale diffs per module kunnen bekijken in
+plaats van een grote Node-RED JSON export op één regel.
+
+De Node-RED bestanden, de documentatie over de originele proxy-aanpak, en de
+Home Assistant voorbeelden blijven afkomstig van de upstream repository van
+`gast777`, behalve waar deze fork expliciet AppDaemon/HACS documentatie toevoegt.
+
 ## AppDaemon via HACS
 
 Deze branch bevat naast de Node-RED flow ook een AppDaemon versie van de proxy.
@@ -243,6 +286,8 @@ Het metrics dashboard toont:
 - per Zendure device de uitgaande queue depth.
 
 De proxy publiceert standaard ook Home Assistant sensors via AppDaemon `set_state()`. De sensors worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
+
+De AppDaemon sensors zijn live operationele sensors. `ZendureProxy._publish_metrics_sensors()` zet bewust geen `state_class` attribute via `set_state()`, omdat Home Assistant dynamische AppDaemon state updates met `state_class` in sommige installaties als `400 Bad Request` afwijst. De Prometheus-vriendelijke namen blijven beschikbaar in `MetricsRegistry.prometheus_lines()`, zodat later een `/metrics` endpoint kan worden toegevoegd voor langere bewaartermijnen en externe monitoring.
 
 Voorbeelden van sensors:
 
