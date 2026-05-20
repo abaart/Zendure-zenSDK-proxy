@@ -294,6 +294,9 @@ def build_combined_response(
         resp[f"sn{s}"] = devs[i].sn
         props[f"electricLevel{s}"] = devs[i].electric_level
         props[f"latestPowerCmd{s}"] = device_power_cmd
+        props[f"acMode{s}"] = dp.get("acMode", 0)
+        props[f"inputLimit{s}"] = dp.get("inputLimit", 0)
+        props[f"outputLimit{s}"] = dp.get("outputLimit", 0)
         props[f"outputPackPower{s}"] = dp.get("outputPackPower", 0)
         props[f"packInputPower{s}"] = dp.get("packInputPower", 0)
         props[f"outputHomePower{s}"] = dp.get("outputHomePower", 0)
@@ -314,7 +317,7 @@ def build_combined_response(
         for key in (
             "electricLevel", "latestPowerCmd", "outputPackPower",
             "packInputPower", "outputHomePower", "gridInputPower",
-            "socStatus", "smartMode",
+            "acMode", "inputLimit", "outputLimit", "socStatus", "smartMode",
         ):
             props[f"{key}{s}"] = 0
         props[f"socLimit{s}"] = -1

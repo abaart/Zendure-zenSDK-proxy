@@ -33,16 +33,30 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             state_class="measurement",
             device_class="power",
         )
+        directed_power = _directed_power(
+            props.get(f"gridInputPower_{idx}", 0),
+            props.get(f"outputHomePower_{idx}", 0),
+        )
         add(
             f"sensor.zendure_{idx}_vermogen_aansturing",
-            _directed_power(
-                props.get(f"gridInputPower_{idx}", 0),
-                props.get(f"outputHomePower_{idx}", 0),
-            ),
+            directed_power,
             f"Zendure {idx} Vermogen Aansturing",
             unit_of_measurement="W",
             state_class="measurement",
             device_class="power",
+        )
+        mode = _power_mode(directed_power)
+        add(
+            f"sensor.zendure_{idx}_modus",
+            mode,
+            f"Zendure {idx} Modus",
+            icon=_power_mode_icon(mode),
+        )
+        add(
+            f"sensor.zendure_{idx}_relais_stand",
+            _relay_state(props.get(f"acMode_{idx}", 0)),
+            f"Zendure {idx} Relais Stand",
+            icon="mdi:swap-vertical-bold",
         )
         add(
             f"sensor.zendure_{idx}_kalibratie_bezig",
@@ -168,6 +182,27 @@ def _directed_power(grid_input: Any, home_output: Any) -> int:
     charging = _int(grid_input)
     discharging = -_int(home_output)
     return charging if charging != 0 else discharging
+
+
+def _power_mode(power: Any) -> str:
+    value = _int(power)
+    if value > 0:
+        return "Opladen"
+    if value < 0:
+        return "Ontladen"
+    return "Standby"
+
+
+def _power_mode_icon(state: str) -> str:
+    return {
+        "Opladen": "mdi:battery-plus-variant",
+        "Ontladen": "mdi:battery-minus-variant",
+        "Standby": "mdi:battery-outline",
+    }.get(state, "mdi:battery-outline")
+
+
+def _relay_state(value: Any) -> str:
+    return _map_int(value, {0: "Standby", 1: "Oplaadstand", 2: "Ontlaadstand"})
 
 
 def _zendure_temp(raw: Any) -> float:

@@ -191,6 +191,9 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         sensors = build_proxy_ha_sensors(response)
 
         self.assertEqual(response["properties"]["socLimit_2"], 2)
+        self.assertEqual(response["properties"]["acMode_2"], 1)
+        self.assertEqual(response["properties"]["inputLimit_2"], 100)
+        self.assertEqual(response["properties"]["outputLimit_2"], 0)
         self.assertEqual(response["sn_2"], "SN2")
         self.assertEqual(response["properties"]["dualModeDamper"], 1)
         self.assertEqual(response["properties"]["activeDevice"], 7)
@@ -199,7 +202,51 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
             "Ontlaadlimiet bereikt",
         )
         self.assertEqual(sensors["sensor.zendure_2_serienummer"][0], "SN2")
+        self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Opladen")
+        self.assertEqual(sensors["sensor.zendure_2_relais_stand"][0], "Oplaadstand")
         self.assertEqual(sensors["sensor.dual_mode_demper_status"][0], "Aan")
+
+    def test_proxy_sensor_builder_publishes_per_device_modes(self) -> None:
+        results = [
+            _device(1, "SN1", ac_mode=1, input_limit=500, grid_input_power=500),
+            _device(2, "SN2", ac_mode=0, input_limit=0, grid_input_power=0),
+            _device(
+                3,
+                "SN3",
+                ac_mode=2,
+                input_limit=0,
+                output_limit=700,
+                grid_input_power=0,
+                output_home_power=700,
+            ),
+        ]
+        state = ProxyState(
+            device_count=3,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1"),
+                DeviceState(ip="ip2", sn="SN2"),
+                DeviceState(ip="ip3", sn="SN3"),
+            ],
+        )
+        for idx, dev in enumerate(state.devices):
+            props = results[idx]["properties"]
+            dev.electric_level = props["electricLevel"]
+            dev.smart_mode = props["smartMode"]
+            dev.soc_limit = props["socLimit"]
+
+        response = build_combined_response(
+            results,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"]),
+        )
+        sensors = build_proxy_ha_sensors(response)
+
+        self.assertEqual(sensors["sensor.zendure_1_modus"][0], "Opladen")
+        self.assertEqual(sensors["sensor.zendure_1_relais_stand"][0], "Oplaadstand")
+        self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Standby")
+        self.assertEqual(sensors["sensor.zendure_2_relais_stand"][0], "Standby")
+        self.assertEqual(sensors["sensor.zendure_3_modus"][0], "Ontladen")
+        self.assertEqual(sensors["sensor.zendure_3_relais_stand"][0], "Ontlaadstand")
 
     def test_combined_response_recovers_power_command_after_restart(self) -> None:
         results = [
@@ -348,6 +395,7 @@ def _device(
     idx: int,
     sn: str,
     *,
+    ac_mode: int = 1,
     input_limit: int = 100,
     output_limit: int = 0,
     grid_input_power: int | None = None,
@@ -360,7 +408,7 @@ def _device(
         "product": f"Product {idx}",
         "packData": [{"socLevel": 50 + idx, "maxTemp": 2831 + idx}],
         "properties": {
-            "acMode": 1,
+            "acMode": ac_mode,
             "inputLimit": input_limit,
             "outputLimit": output_limit,
             "outputPackPower": 0,
