@@ -165,7 +165,7 @@ def test_manage_standby_blocks_node_red_guard_conditions() -> None:
         device_count=2,
         devices=[
             DeviceState(ip="ip1", sn="SN1", electric_level=50),
-            DeviceState(ip="ip2", sn="SN2", electric_level=52, latest_power_cmd_zero_ts=10),
+            DeviceState(ip="ip2", sn="SN2", electric_level=55, latest_power_cmd_zero_ts=10),
         ],
         device_active_count=1,
         devices_active_idx=[0],
@@ -227,6 +227,45 @@ def test_manage_standby_blocks_node_red_guard_conditions() -> None:
         )
     )
     assert state.devices[1].standby_task is None
+
+
+def test_manage_standby_allows_charging_when_soc_diff_is_below_node_red_threshold() -> None:
+    cfg = Config(device_ips=["ip1", "ip2"], standby_timer=300)
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", electric_level=50, smart_mode=1),
+            DeviceState(
+                ip="ip2",
+                sn="SN2",
+                electric_level=52,
+                smart_mode=1,
+                latest_power_cmd_zero_ts=now() - 100,
+            ),
+        ],
+        device_active_count=1,
+        devices_active_idx=[0],
+        latest_power_cmd=500,
+        latest_get_ts=now(),
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    async def run_check() -> None:
+        await manage_standby(
+            state,
+            clients,
+            1,
+            [500, 0],
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+        task = state.devices[1].standby_task
+        assert task is not None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_check())
 
 
 def test_periodic_standby_check_schedules_overdue_passive_device() -> None:
