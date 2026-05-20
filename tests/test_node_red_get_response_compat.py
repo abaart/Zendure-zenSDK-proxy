@@ -172,3 +172,36 @@ def test_two_device_dual_mode_reports_both_active_even_with_one_zero_command() -
     )
 
     assert response["properties"]["activeDevice"] == 3
+
+
+def test_three_device_grid_off_mode_matches_node_red_two_eco_devices() -> None:
+    results = [
+        device_response(1, "SN1", properties={"gridOffMode": 1}),
+        device_response(2, "SN2", properties={"gridOffMode": 1}),
+        device_response(3, "SN3", properties={"gridOffMode": 2}),
+    ]
+
+    response = build_combined_response(
+        results,
+        _state_for(results),
+        Config(device_ips=["ip1", "ip2", "ip3"]),
+    )
+
+    assert response["properties"]["gridOffMode"] == 1
+    assert response["properties"]["gridOffMode_1"] == 1
+    assert response["properties"]["gridOffMode_2"] == 1
+    assert response["properties"]["gridOffMode_3"] == 2
+
+
+def test_absent_devices_use_node_red_unknown_smart_mode_value() -> None:
+    results = [device_response(1, "SN1", properties={"smartMode": 1})]
+
+    response = build_combined_response(
+        results,
+        _state_for(results),
+        Config(device_ips=["ip1"]),
+    )
+
+    assert response["properties"]["smartMode_1"] == 1
+    assert response["properties"]["smartMode_2"] == -1
+    assert response["properties"]["smartMode_3"] == -1

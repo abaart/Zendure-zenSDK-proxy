@@ -636,7 +636,6 @@ class ZendureProxy(hass.Hass):
         status = 500
         timeout = False
         self._state.counter_get_received += 1
-        self._state.latest_get_ts = now()
 
         try:
             if not self._cfg.device_ips:

@@ -58,6 +58,7 @@ async def execute_get(
 
     response = build_combined_response(results, state, cfg)
     state.last_get_response = response
+    state.latest_get_ts = now()
     return response
 
 
@@ -301,7 +302,7 @@ def build_combined_response(
         cnt0, cnt1, cnt2 = gom.count(0), gom.count(1), gom.count(2)
         if cnt0 > 0:
             props["gridOffMode"] = 0
-        elif cnt1 == 1 and cnt1 + cnt2 == n:
+        elif cnt1 >= 1 and cnt1 + cnt2 == n:
             props["gridOffMode"] = 1
         elif len(set(gom)) == 1:
             props["gridOffMode"] = gom[0]
@@ -353,11 +354,12 @@ def build_combined_response(
         for key in (
             "electricLevel", "latestPowerCmd", "outputPackPower",
             "packInputPower", "outputHomePower", "gridInputPower",
-            "inputLimit", "outputLimit", "socStatus", "smartMode",
+            "inputLimit", "outputLimit", "socStatus",
         ):
             props[f"{key}{s}"] = 0
         props[f"acMode{s}"] = None
         props[f"socLimit{s}"] = -1
+        props[f"smartMode{s}"] = -1
         props[f"hyperTmp{s}"] = 2731
         props[f"sn{s}"] = ""
         props[f"ipAddress{s}"] = ""

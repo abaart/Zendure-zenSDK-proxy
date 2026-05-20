@@ -31,23 +31,6 @@ async def manage_standby(
     """
     active_set = set(state.devices_active_idx)
     devs = state.devices
-    now_ts = now()
-    transition_recent = any(
-        start > 0 and now_ts - start < cfg.transition_timer + 10
-        for start in (
-            state.transition_start_ts,
-            state.single_to_dual_transition_start_ts,
-            state.forced_dual_transition_start_ts,
-        )
-    )
-    stale_get = state.latest_get_ts <= 0 or now_ts - state.latest_get_ts > 10
-    zero_power = state.latest_power_cmd == 0
-    charging_diff_guard = (
-        state.device_count == 2
-        and ac_mode == 1
-        and abs(devs[0].electric_level - devs[1].electric_level)
-        < cfg.device_change_diff
-    )
 
     for i, dev in enumerate(devs):
         if i in active_set:
@@ -65,17 +48,12 @@ async def manage_standby(
                 (ac_mode == 1 and cfg.standby_charging)
                 or (ac_mode == 2 and cfg.standby_discharging)
             )
-            should_standby = (
-                should_standby
-                and not transition_recent
-                and not stale_get
-                and not zero_power
-                and not charging_diff_guard
-                and dev.latest_power_cmd_zero_ts > 0
-            )
+            should_standby = should_standby and _standby_allowed(i, state, cfg)
             if should_standby and dev.standby_task is None:
                 dev.standby_task = asyncio.ensure_future(
-                    _delayed_standby(i, state, clients, cfg.standby_timer, logger)
+                    _delayed_standby(
+                        i, state, clients, cfg.standby_timer, logger, cfg=cfg
+                    )
                 )
             elif not should_standby and dev.standby_task:
                 dev.standby_task.cancel()
@@ -88,15 +66,21 @@ async def _delayed_standby(
     clients: list[DeviceClient],
     delay: float,
     logger: Callable,
+    *,
+    cfg: Config | None = None,
 ) -> None:
     """Wait *delay* seconds then send smartMode=0 to put the device to sleep."""
     try:
         await asyncio.sleep(delay)
         dev = state.devices[idx]
+        if cfg is not None and not _standby_allowed(idx, state, cfg):
+            return
         if idx not in state.devices_active_idx:
             zero_ts = dev.latest_power_cmd_zero_ts
             sent_key = dev.sn or f"device-{idx + 1}"
             if zero_ts > 0 and state.standby_last_sent_by_sn.get(sent_key) == zero_ts:
+                return
+            if dev.smart_mode == 0:
                 return
             await clients[idx].post(
                 {
@@ -120,3 +104,45 @@ async def _delayed_standby(
     finally:
         if idx < len(state.devices):
             state.devices[idx].standby_task = None
+
+
+def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
+    if state.device_count < 2:
+        return False
+    if idx in state.devices_active_idx:
+        return False
+    if idx >= len(state.devices):
+        return False
+
+    dev = state.devices[idx]
+    now_ts = now()
+    transition_recent = any(
+        start > 0 and now_ts - start < cfg.transition_timer + 10
+        for start in (
+            state.transition_start_ts,
+            state.single_to_dual_transition_start_ts,
+            state.forced_dual_transition_start_ts,
+        )
+    )
+    stale_get = state.latest_get_ts <= 0 or now_ts - state.latest_get_ts > 10
+    zero_power = state.latest_power_cmd == 0
+    charging_diff_guard = (
+        state.device_count == 2
+        and state.latest_power_cmd > 0
+        and abs(state.devices[0].electric_level - state.devices[1].electric_level)
+        < cfg.device_change_diff
+    )
+    direction_enabled = (
+        (state.latest_power_cmd > 0 and cfg.standby_charging)
+        or (state.latest_power_cmd < 0 and cfg.standby_discharging)
+    )
+    return (
+        state.device_active_count < state.device_count
+        and direction_enabled
+        and not transition_recent
+        and not stale_get
+        and not zero_power
+        and not charging_diff_guard
+        and dev.latest_power_cmd_zero_ts > 0
+        and dev.smart_mode != 0
+    )

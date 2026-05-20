@@ -117,6 +117,39 @@ def test_delayed_standby_skips_duplicate_zero_timestamp() -> None:
     ]
 
 
+def test_delayed_standby_rechecks_recent_successful_get_before_post() -> None:
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", smart_mode=1),
+            DeviceState(
+                ip="ip2",
+                sn="SN2",
+                smart_mode=1,
+                latest_power_cmd_zero_ts=123,
+            ),
+        ],
+        device_active_count=1,
+        devices_active_idx=[0],
+        latest_power_cmd=500,
+        latest_get_ts=now() - 11,
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        _delayed_standby(
+            1,
+            state,
+            clients,
+            0,
+            lambda *args, **kwargs: None,
+            cfg=Config(device_ips=["ip1", "ip2"]),
+        )
+    )
+
+    assert clients[1].post_payloads == []
+
+
 def test_manage_standby_blocks_node_red_guard_conditions() -> None:
     cfg = Config(device_ips=["ip1", "ip2"], standby_timer=300)
     state = ProxyState(
@@ -248,6 +281,44 @@ def test_execute_get_raises_gateway_timeout_when_strict_compat_is_enabled() -> N
         assert str(exc) == "Gateway Timeout"
     else:
         raise AssertionError("GatewayTimeoutError was not raised")
+
+
+def test_successful_get_updates_latest_get_timestamp_only_after_device_replies() -> None:
+    state = ProxyState(
+        device_count=1,
+        devices=[DeviceState(ip="ip1", sn="SN1")],
+    )
+    state.latest_get_ts = 0
+    clients = [FakeDeviceClient(device_response(1, "SN1"))]
+
+    asyncio.run(
+        execute_get(
+            clients,
+            state,
+            Config(device_ips=["ip1"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.latest_get_ts > 0
+
+    previous_ts = state.latest_get_ts
+    clients = [FakeDeviceClient(None)]
+    try:
+        asyncio.run(
+            execute_get(
+                clients,
+                state,
+                Config(device_ips=["ip1"], node_red_compat_strict_get_errors=True),
+                lambda *args, **kwargs: None,
+            )
+        )
+    except GatewayTimeoutError:
+        pass
+    else:
+        raise AssertionError("GatewayTimeoutError was not raised")
+
+    assert state.latest_get_ts == previous_ts
 
 
 def test_report_request_returns_gateway_timeout_for_strict_get_error() -> None:

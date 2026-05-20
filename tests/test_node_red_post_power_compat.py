@@ -102,6 +102,26 @@ def test_runtime_mode_toggles_update_proxy_state_without_device_posts() -> None:
     ]
 
 
+def test_runtime_mode_post_with_extra_properties_does_not_post_to_devices() -> None:
+    state = _state(2)
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+    payload = {"properties": {"equalMode": 1, "inputLimit": 500}}
+
+    response = asyncio.run(
+        execute_post(
+            payload,
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.equal_mode is True
+    assert response == payload
+    assert [client.post_payloads for client in clients] == [[], []]
+
+
 def test_equal_mode_distributes_power_equally_across_active_devices() -> None:
     state = _state(3)
     state.equal_mode = True
@@ -253,6 +273,49 @@ def test_ac_mode_inconsistent_adds_ac_mode_to_next_power_post() -> None:
         {"acMode": 1, "inputLimit": 250},
         {"acMode": 1, "inputLimit": 250},
     ]
+
+
+def test_power_post_divides_limit_properties_before_sending_to_devices() -> None:
+    state = _state(2)
+    state.device_active_count = 2
+    state.devices_active_idx = [0, 1]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {
+                "properties": {
+                    "acMode": 1,
+                    "inputLimit": 500,
+                    "chargeMaxLimit": 1601,
+                    "inverseMaxPower": 1501,
+                }
+            },
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert [client.post_payloads[0]["properties"] for client in clients] == [
+        {
+            "acMode": 1,
+            "inputLimit": 250,
+            "chargeMaxLimit": 800,
+            "inverseMaxPower": 750,
+        },
+        {
+            "acMode": 1,
+            "inputLimit": 250,
+            "chargeMaxLimit": 800,
+            "inverseMaxPower": 750,
+        },
+    ]
+    assert state.charge_max_limit_cmd == 1601
+    assert state.charge_max_limit_effective == 1600
+    assert state.inverse_max_power_cmd == 1501
+    assert state.inverse_max_power_effective == 1500
 
 
 def test_power_post_wakes_standby_device_in_same_payload() -> None:
@@ -458,3 +521,58 @@ def test_dual_mode_damper_keeps_single_device_power() -> None:
         800,
         0,
     ]
+
+
+def test_dual_mode_damper_waits_until_previous_power_is_nonzero() -> None:
+    state = _state(2)
+    state.latest_power_cmd = 0
+    state.devices[0].electric_level = 80
+    state.devices[1].electric_level = 80
+    state.devices_active_idx = [0]
+    state.single_mode_active_device = 0
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 900}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                damper_enable=True,
+                damper_amount=200,
+                damper_timer=120,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 2
+    assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
+        450,
+        450,
+    ]
+
+
+def test_dual_to_single_reselects_active_device_like_node_red() -> None:
+    state = _state(2)
+    state.device_active_count = 2
+    state.devices_active_idx = [0, 1]
+    state.single_mode_active_device = 1
+    state.devices[0].electric_level = 50
+    state.devices[1].electric_level = 51
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 100}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.single_mode_active_device == 0
+    assert state.devices_active_idx == [0]

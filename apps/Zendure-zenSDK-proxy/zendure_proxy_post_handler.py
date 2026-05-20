@@ -39,7 +39,11 @@ async def execute_post(
     props = dict(payload.get("properties") or {})
     n = state.device_count
     devs = state.devices
-    _apply_runtime_mode_props(props, state)
+    runtime_key = _first_runtime_mode_key(props)
+    if runtime_key is not None:
+        _apply_runtime_mode_prop(runtime_key, props[runtime_key], state)
+        return payload
+
     device_props = {
         key: value for key, value in props.items()
         if key not in _RUNTIME_MODE_KEYS
@@ -59,24 +63,7 @@ async def execute_post(
             state.ac_mode = _int(device_props["acMode"])
 
         outbound_props = dict(device_props)
-
-        # chargeMaxLimit and inverseMaxPower are aggregate values; divide by n
-        if n > 0 and "chargeMaxLimit" in outbound_props:
-            per = _int(outbound_props["chargeMaxLimit"]) // n
-            state.charge_max_limit_cmd = _int(outbound_props["chargeMaxLimit"])
-            state.charge_max_limit_effective = per * n
-            outbound_props["chargeMaxLimit"] = per
-            for dev in devs:
-                dev.charge_max_limit = per
-            state.max_power_in = per
-        if n > 0 and "inverseMaxPower" in outbound_props:
-            per = _int(outbound_props["inverseMaxPower"]) // n
-            state.inverse_max_power_cmd = _int(outbound_props["inverseMaxPower"])
-            state.inverse_max_power_effective = per * n
-            outbound_props["inverseMaxPower"] = per
-            for dev in devs:
-                dev.inverse_max_power = per
-            state.max_power_out = per
+        _apply_aggregate_limit_props(outbound_props, state, devs, n)
 
         responses = []
         for i, client in enumerate(clients):
@@ -138,6 +125,7 @@ async def execute_post(
         and (cfg.damper_enable or state.dualmode_damper_enabled)
         and ac_mode == 2
         and n >= 2
+        and state.latest_power_cmd != 0
     ):
         distribution_power = _apply_single_mode_damper(
             distribution_power, state, upper, now_ts, cfg
@@ -155,7 +143,10 @@ async def execute_post(
     prev_active_device = state.single_mode_active_device
     prev_active_idx = list(state.devices_active_idx)
     if not invalid_direction:
-        _select_active_devices(state, ac_mode, cfg)
+        _select_active_devices(
+            state, ac_mode, cfg,
+            previous_active_count=previous_active_count,
+        )
 
     if (
         state.device_active_count > 1
@@ -170,6 +161,7 @@ async def execute_post(
     if (
         state.device_active_count == 1
         and state.single_mode_active_device != prev_active_device
+        and previous_active_count == 1
         and not (
             (ac_mode == 1 and any(dev.soc_limit == 1 for dev in devs))
             or (ac_mode == 2 and any(dev.soc_limit == 2 for dev in devs))
@@ -193,6 +185,9 @@ async def execute_post(
         )
         per_device = apply_transition(per_device, state, now_ts, cfg.transition_timer)
 
+    outbound_props = dict(props)
+    _apply_aggregate_limit_props(outbound_props, state, devs, n)
+
     # ── Send commands to all devices in parallel ───────────────────────────────
     tasks = []
     for i, client in enumerate(clients):
@@ -209,7 +204,7 @@ async def execute_post(
             invalid_direction,
             include_ac_mode=state.ac_mode_inconsistent or wake_standby_device,
         )
-        for k, v in props.items():
+        for k, v in outbound_props.items():
             if k not in _POWER_KEYS:
                 dp[k] = v
         if wake_standby_device:
@@ -274,13 +269,48 @@ def _power_ac_mode(
     return current_ac_mode
 
 
-def _apply_runtime_mode_props(props: dict, state: ProxyState) -> None:
-    if "equalMode" in props:
-        state.equal_mode = bool(_int(props["equalMode"]))
-    if "alwaysDualMode" in props:
-        state.always_dual_mode = bool(_int(props["alwaysDualMode"]))
-    if "dualModeDamper" in props:
-        state.dualmode_damper_enabled = bool(_int(props["dualModeDamper"]))
+def _first_runtime_mode_key(props: dict) -> str | None:
+    for key in ("equalMode", "alwaysDualMode", "dualModeDamper"):
+        if key in props:
+            return key
+    return None
+
+
+def _apply_runtime_mode_prop(key: str, value, state: ProxyState) -> None:
+    if key == "equalMode":
+        state.equal_mode = bool(_int(value))
+    elif key == "alwaysDualMode":
+        state.always_dual_mode = bool(_int(value))
+    elif key == "dualModeDamper":
+        state.dualmode_damper_enabled = bool(_int(value))
+
+
+def _apply_aggregate_limit_props(
+    props: dict,
+    state: ProxyState,
+    devs: list,
+    n: int,
+) -> None:
+    if n <= 0:
+        return
+    if "chargeMaxLimit" in props:
+        command = _int(props["chargeMaxLimit"])
+        per = command // n
+        state.charge_max_limit_cmd = command
+        state.charge_max_limit_effective = per * n
+        props["chargeMaxLimit"] = per
+        for dev in devs:
+            dev.charge_max_limit = per
+        state.max_power_in = per
+    if "inverseMaxPower" in props:
+        command = _int(props["inverseMaxPower"])
+        per = command // n
+        state.inverse_max_power_cmd = command
+        state.inverse_max_power_effective = per * n
+        props["inverseMaxPower"] = per
+        for dev in devs:
+            dev.inverse_max_power = per
+        state.max_power_out = per
 
 
 def _power_payload_for_device(
@@ -365,7 +395,13 @@ def _suppress_standby_post(dev, props: dict) -> bool:
     return power_zero or wake_only
 
 
-def _select_active_devices(state: ProxyState, ac_mode: int, cfg: Config) -> None:
+def _select_active_devices(
+    state: ProxyState,
+    ac_mode: int,
+    cfg: Config,
+    *,
+    previous_active_count: int | None = None,
+) -> None:
     """Choose which specific device indices are active based on SoC."""
     devs = state.devices
     n = state.device_count
@@ -404,7 +440,17 @@ def _select_active_devices(state: ProxyState, ac_mode: int, cfg: Config) -> None
         else:
             best = ranked[0]
             current = state.single_mode_active_device
-            if abs(devs[best].electric_level - devs[current].electric_level) >= diff_threshold:
+            force_reselect = (
+                previous_active_count is not None
+                and previous_active_count != active_count
+            ) or (
+                n == 2 and all(d.smart_mode == 0 for d in devs[:2])
+            )
+            if (
+                abs(devs[best].electric_level - devs[current].electric_level)
+                >= diff_threshold
+                or force_reselect
+            ):
                 state.single_mode_active_device = best
         state.devices_active_idx = [state.single_mode_active_device]
     else:
