@@ -73,10 +73,11 @@ async def execute_post(
     if not is_repeat:
         state.latest_power_message_ts = now_ts
 
-    ac_mode: int = props.get("acMode", state.ac_mode)
     input_limit: int = props.get("inputLimit", 0)
     output_limit: int = props.get("outputLimit", 0)
+    ac_mode: int = _power_ac_mode(props, state.ac_mode, input_limit, output_limit)
     total_power = input_limit if ac_mode == 1 else (output_limit if ac_mode == 2 else 0)
+    latest_power_cmd = _signed_power_cmd(ac_mode, total_power)
 
     max_power = (state.max_power_in if ac_mode == 1 else state.max_power_out) or 800
 
@@ -124,7 +125,7 @@ async def execute_post(
         if devs[i].sn:
             device_payload["sn"] = devs[i].sn
         tasks.append(client.post(device_payload))
-        devs[i].latest_power_cmd = pwr
+        devs[i].latest_power_cmd = _signed_power_cmd(ac_mode, pwr)
         if pwr == 0:
             devs[i].latest_power_cmd_zero_ts = now_ts
 
@@ -132,7 +133,7 @@ async def execute_post(
 
     # ── Update aggregate state ─────────────────────────────────────────────────
     state.ac_mode = ac_mode
-    state.latest_power_cmd = total_power
+    state.latest_power_cmd = latest_power_cmd
     if ac_mode == 1:
         state.input_limit = input_limit
         state.input_limit_effective = sum(per_device)
@@ -150,6 +151,29 @@ async def execute_post(
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
+
+def _power_ac_mode(
+    props: dict,
+    current_ac_mode: int,
+    input_limit: int,
+    output_limit: int,
+) -> int:
+    if "acMode" in props:
+        return props["acMode"]
+    if input_limit > 0 and output_limit <= 0:
+        return 1
+    if output_limit > 0 and input_limit <= 0:
+        return 2
+    return current_ac_mode
+
+
+def _signed_power_cmd(ac_mode: int, power: int) -> int:
+    if ac_mode == 1:
+        return power
+    if ac_mode == 2:
+        return -power
+    return 0
+
 
 def _select_active_devices(state: ProxyState, ac_mode: int, cfg: Config) -> None:
     """Choose which specific device indices are active based on SoC."""

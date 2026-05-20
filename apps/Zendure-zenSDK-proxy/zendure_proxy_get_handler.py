@@ -284,13 +284,16 @@ def build_combined_response(
                 props[target_key] = source.get(f"solarPower{source_idx}", 0)
 
     # ── Per-device suffix fields (proxy additions _1 / _2 / _3) ───────────────
+    device_power_cmds = []
     for i in range(n):
         s = f"_{i+1}"
         dp = results[i].get("properties", {})
+        device_power_cmd = devs[i].latest_power_cmd or _reported_power_cmd(dp)
+        device_power_cmds.append(device_power_cmd)
         resp[f"product{s}"] = results[i].get("product", "")
         resp[f"sn{s}"] = devs[i].sn
         props[f"electricLevel{s}"] = devs[i].electric_level
-        props[f"latestPowerCmd{s}"] = devs[i].latest_power_cmd
+        props[f"latestPowerCmd{s}"] = device_power_cmd
         props[f"outputPackPower{s}"] = dp.get("outputPackPower", 0)
         props[f"packInputPower{s}"] = dp.get("packInputPower", 0)
         props[f"outputHomePower{s}"] = dp.get("outputHomePower", 0)
@@ -321,9 +324,11 @@ def build_combined_response(
         props[f"gridOffMode{s}"] = 2
 
     # ── Proxy metadata ─────────────────────────────────────────────────────────
+    latest_power_cmd = state.latest_power_cmd or _reported_power_cmd(props)
     props["activeDevice"] = _active_device_mask(
         state,
-        latest_power_cmd=state.latest_power_cmd,
+        latest_power_cmd=latest_power_cmd,
+        device_power_cmds=device_power_cmds,
         soc_limit=props["socLimit"],
         output_pack_power=props["outputPackPower"],
         pack_input_power=props["packInputPower"],
@@ -332,7 +337,7 @@ def build_combined_response(
     props["alwaysDualMode"] = 1 if cfg.always_dual_mode else 0
     props["dualModeDamper"] = 1 if cfg.damper_enable else 0
     props["proxyVersion"] = PROXY_VERSION
-    props["latestPowerCmd"] = state.latest_power_cmd
+    props["latestPowerCmd"] = latest_power_cmd
     props["device_active_count"] = state.device_active_count
 
     # Pass through any device-0 properties not explicitly handled above
@@ -347,6 +352,7 @@ def _active_device_mask(
     state: ProxyState,
     *,
     latest_power_cmd: int,
+    device_power_cmds: list[int],
     soc_limit: int,
     output_pack_power: int,
     pack_input_power: int,
@@ -360,7 +366,9 @@ def _active_device_mask(
     if latest_power_cmd == 0 or charging_limit_powerzero or discharging_limit_powerzero:
         return 0
 
-    active_idx = state.devices_active_idx
+    active_idx = [idx for idx, cmd in enumerate(device_power_cmds[:3]) if cmd != 0]
+    if not active_idx:
+        active_idx = state.devices_active_idx
     if not active_idx and state.device_count:
         active_idx = [state.single_mode_active_device]
     mask = 0
@@ -368,3 +376,19 @@ def _active_device_mask(
         if 0 <= idx < 3:
             mask |= 1 << idx
     return mask
+
+
+def _reported_power_cmd(props: dict) -> int:
+    ac_mode = _int(props.get("acMode", 0))
+    if ac_mode == 1:
+        return max(0, _int(props.get("inputLimit", 0)))
+    if ac_mode == 2:
+        return -max(0, _int(props.get("outputLimit", 0)))
+    return 0
+
+
+def _int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default

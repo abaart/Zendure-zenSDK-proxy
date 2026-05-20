@@ -85,6 +85,7 @@ from zendure_proxy_get_handler import build_combined_response  # noqa: E402
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors  # noqa: E402
 from zendure_proxy_metrics import MetricsRegistry  # noqa: E402
 from zendure_proxy_mqtt_discovery import mqtt_sensor_config  # noqa: E402
+from zendure_proxy_post_handler import execute_post  # noqa: E402
 from zendure_proxy_state import DeviceState, ProxyState  # noqa: E402
 
 
@@ -200,6 +201,72 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(sensors["sensor.zendure_2_serienummer"][0], "SN2")
         self.assertEqual(sensors["sensor.dual_mode_demper_status"][0], "Aan")
 
+    def test_combined_response_recovers_power_command_after_restart(self) -> None:
+        results = [
+            _device(1, "SN1", input_limit=799, grid_input_power=799),
+            _device(2, "SN2", input_limit=800, grid_input_power=800),
+            _device(3, "SN3", input_limit=800, grid_input_power=800),
+        ]
+        state = ProxyState(
+            device_count=3,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1"),
+                DeviceState(ip="ip2", sn="SN2"),
+                DeviceState(ip="ip3", sn="SN3"),
+            ],
+        )
+        for idx, dev in enumerate(state.devices):
+            dev.electric_level = results[idx]["properties"]["electricLevel"]
+            dev.smart_mode = results[idx]["properties"]["smartMode"]
+            dev.soc_limit = results[idx]["properties"]["socLimit"]
+
+        response = build_combined_response(
+            results,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"]),
+        )
+        sensors = build_proxy_ha_sensors(response)
+
+        self.assertEqual(response["properties"]["latestPowerCmd"], 2399)
+        self.assertEqual(response["properties"]["latestPowerCmd_1"], 799)
+        self.assertEqual(response["properties"]["latestPowerCmd_2"], 800)
+        self.assertEqual(response["properties"]["latestPowerCmd_3"], 800)
+        self.assertEqual(response["properties"]["activeDevice"], 7)
+        self.assertEqual(sensors["sensor.vermogensopdracht"][0], 2399)
+        self.assertEqual(sensors["sensor.vermogensopdracht_zendure_2"][0], 800)
+        self.assertEqual(sensors["sensor.zendure_actief_device"][0], "Alle")
+
+    def test_post_infers_charge_mode_from_input_limit_without_ac_mode(self) -> None:
+        state = ProxyState(
+            device_count=3,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1", electric_level=81),
+                DeviceState(ip="ip2", sn="SN2", electric_level=89),
+                DeviceState(ip="ip3", sn="SN3", electric_level=81),
+            ],
+            max_power_in=800,
+        )
+        clients = [_FakeClient() for _idx in range(3)]
+
+        asyncio.run(
+            execute_post(
+                {"properties": {"inputLimit": 2400}},
+                clients,
+                state,
+                Config(device_ips=["ip1", "ip2", "ip3"]),
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        self.assertEqual(state.ac_mode, 1)
+        self.assertEqual(state.latest_power_cmd, 2400)
+        self.assertEqual([dev.latest_power_cmd for dev in state.devices], [800, 799, 800])
+        self.assertEqual([client.posts[0]["properties"]["acMode"] for client in clients], [1, 1, 1])
+        self.assertEqual(
+            [client.posts[0]["properties"]["inputLimit"] for client in clients],
+            [800, 799, 800],
+        )
+
     def test_mqtt_discovery_keeps_unique_id_and_default_entity_id(self) -> None:
         config = mqtt_sensor_config(
             "sensor.zendure_2_serienummer",
@@ -268,19 +335,38 @@ def _combined_three_device_response() -> dict:
     )
 
 
-def _device(idx: int, sn: str) -> dict:
+class _FakeClient:
+    def __init__(self):
+        self.posts = []
+
+    async def post(self, payload: dict) -> dict:
+        self.posts.append(payload)
+        return {"ack": "pong"}
+
+
+def _device(
+    idx: int,
+    sn: str,
+    *,
+    input_limit: int = 100,
+    output_limit: int = 0,
+    grid_input_power: int | None = None,
+    output_home_power: int = 0,
+) -> dict:
+    if grid_input_power is None:
+        grid_input_power = 20 + idx
     return {
         "sn": sn,
         "product": f"Product {idx}",
         "packData": [{"socLevel": 50 + idx, "maxTemp": 2831 + idx}],
         "properties": {
             "acMode": 1,
-            "inputLimit": 100,
-            "outputLimit": 0,
+            "inputLimit": input_limit,
+            "outputLimit": output_limit,
             "outputPackPower": 0,
             "packInputPower": 10 + idx,
-            "gridInputPower": 20 + idx,
-            "outputHomePower": 0,
+            "gridInputPower": grid_input_power,
+            "outputHomePower": output_home_power,
             "solarInputPower": 0,
             "gridOffPower": 0,
             "minSoc": 100,

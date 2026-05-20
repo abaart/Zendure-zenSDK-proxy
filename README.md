@@ -1386,6 +1386,8 @@ Huidige versie: 20260520
   De debug trace pagina's zijn bereikbaar via het hamburgermenu linksboven of rechtstreeks via `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxylivedataget` en `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxylivedatapost` (eventueel zonder "/endpoint", afhankelijk van de installatie).
 
 ## Nieuw in versie 20260520 ##
+- De AppDaemon/Python proxy herstelt `latestPowerCmd`, `latestPowerCmd_1`, `latestPowerCmd_2`, `latestPowerCmd_3`, en `activeDevice` nu uit de actuele Zendure GET-data wanneer AppDaemon na een restart nog geen power-opdracht in `ProxyState` heeft. Daardoor tonen `sensor.vermogensopdracht*` en `sensor.zendure_actief_device` niet onterecht `0 W` en `Geen` terwijl de Zendures al laden of ontladen.
+- De AppDaemon/Python proxy leidt `acMode` nu af uit `inputLimit` of `outputLimit` wanneer Home Assistant/Gielz een power POST zonder `acMode` stuurt.
 - De AppDaemon/Python proxy lost AppDaemon `get_state(...)` resultaten nu eerst op voordat `zendure_proxy_ha_sensors.py` proxy sensors bouwt. Daardoor veroorzaakt `input_text.zendure_2400_ac_batterij_volgorde` geen `_asyncio.Task` fout meer in `/endpoint/properties/report`.
 - De AppDaemon/Python proxy levert nu dezelfde REST velden als de Node-RED GET response voor de proxy sensors, waaronder `socLimit_1`, `socLimit_2`, `socLimit_3`, `sn_1`, `sn_2`, `sn_3`, `dualModeDamper`, `equalMode`, `alwaysDualMode`, `outputPackPower_1`, `packInputPower_1`, en `batCalTime_1`.
 - De AppDaemon/Python proxy kan proxy sensors automatisch publiceren. Met MQTT discovery krijgen nieuwe sensors een `unique_id`; zonder MQTT maakt AppDaemon de sensorwaarden alsnog aan zonder `unique_id`.
