@@ -24,7 +24,7 @@ The proxy talks to one, two, or three Zendure devices and returns one combined r
 
 HACS downloads the app code to the Home Assistant configuration directory under `appdaemon/apps/Zendure-zenSDK-proxy/`.
 
-The AppDaemon module must be `zendure_proxy.app`, because the `ZendureProxy` class is defined in `appdaemon/apps/Zendure-zenSDK-proxy/zendure_proxy/app.py`.
+The AppDaemon module must be `zendure_proxy`, because the `ZendureProxy` class is defined in `appdaemon/apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
 
 Point the Gielz `Zendure 2400 AC IP-adres` setting to the AppDaemon proxy address, for example:
 

@@ -4,7 +4,7 @@
 
 Deze branch bevat naast de Node-RED flow ook een AppDaemon versie van de proxy.
 
-HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/zendure_proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `examples/apps.yaml` toe aan je AppDaemon `apps.yaml`.
+HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `examples/apps.yaml` toe aan je AppDaemon `apps.yaml`.
 
 ### Installatie
 
@@ -27,17 +27,17 @@ Als AppDaemon en Home Assistant in dezelfde add-on of container network namespac
 
 ### AppDaemon configuratie
 
-De AppDaemon entry point is `apps/Zendure-zenSDK-proxy/zendure_proxy/app.py`.
+De AppDaemon entry point is `apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
 
 De AppDaemon class is `ZendureProxy`.
 
-De AppDaemon module naam is `zendure_proxy.app`.
+De AppDaemon module naam is `zendure_proxy`.
 
 Volledige configuratie:
 
 ```yaml
 zendure_proxy:
-  module: zendure_proxy.app
+  module: zendure_proxy
   class: ZendureProxy
 
   ip_zendure_1: "192.168.1.101"

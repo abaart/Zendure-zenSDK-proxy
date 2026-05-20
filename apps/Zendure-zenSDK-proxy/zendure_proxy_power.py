@@ -11,7 +11,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .state import ProxyState
+    from zendure_proxy_state import ProxyState
 
 PROXY_VERSION = "20260512-ad"
 

@@ -11,10 +11,10 @@ import asyncio
 import math
 from typing import Any, Callable, Optional
 
-from .config import Config
-from .device_client import DeviceClient
-from .power import PROXY_VERSION, epoch
-from .state import ProxyState
+from zendure_proxy_config import Config
+from zendure_proxy_device_client import DeviceClient
+from zendure_proxy_power import PROXY_VERSION, epoch
+from zendure_proxy_state import ProxyState
 
 
 async def execute_get(

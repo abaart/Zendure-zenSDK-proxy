@@ -10,11 +10,11 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
-from .config import Config
-from .device_client import DeviceClient
-from .power import apply_damper, apply_transition, calc_active_count, distribute_power, now
-from .standby import manage_standby
-from .state import ProxyState
+from zendure_proxy_config import Config
+from zendure_proxy_device_client import DeviceClient
+from zendure_proxy_power import apply_damper, apply_transition, calc_active_count, distribute_power, now
+from zendure_proxy_standby import manage_standby
+from zendure_proxy_state import ProxyState
 
 _POWER_KEYS = {"acMode", "inputLimit", "outputLimit"}
 

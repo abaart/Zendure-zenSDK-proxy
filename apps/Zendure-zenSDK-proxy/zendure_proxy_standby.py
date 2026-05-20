@@ -9,9 +9,9 @@ import asyncio
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
-    from .config import Config
-    from .device_client import DeviceClient
-    from .state import ProxyState
+    from zendure_proxy_config import Config
+    from zendure_proxy_device_client import DeviceClient
+    from zendure_proxy_state import ProxyState
 
 
 async def manage_standby(

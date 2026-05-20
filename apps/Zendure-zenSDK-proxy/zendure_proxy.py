@@ -18,13 +18,13 @@ import aiohttp
 import aiohttp.web
 import appdaemon.plugins.hass.hassapi as hass
 
-from .config import Config, load_config
-from .device_client import DeviceClient
-from .get_handler import execute_get
-from .post_handler import execute_post
-from .power import PROXY_VERSION, now
-from .queue import RequestQueue
-from .state import DeviceState, ProxyState
+from zendure_proxy_config import Config, load_config
+from zendure_proxy_device_client import DeviceClient
+from zendure_proxy_get_handler import execute_get
+from zendure_proxy_post_handler import execute_post
+from zendure_proxy_power import PROXY_VERSION, now
+from zendure_proxy_queue import RequestQueue
+from zendure_proxy_state import DeviceState, ProxyState
 
 
 class ZendureProxy(hass.Hass):
