@@ -8,7 +8,7 @@ from typing import Any
 SensorMap = dict[str, tuple[Any, dict[str, Any]]]
 
 
-def build_proxy_ha_sensors(response: dict, battery_order_raw: str | None = None) -> SensorMap:
+def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> SensorMap:
     props = response.get("properties", {})
     pack_data = response.get("packData") or []
     sensors: SensorMap = {}
@@ -207,8 +207,10 @@ def _offgrid_icon(state: str) -> str:
     return "mdi:power-plug-off" if state == "Uitgeschakeld" else "mdi:power-plug"
 
 
-def _battery_order(raw: str | None) -> list[int] | None:
+def _battery_order(raw: Any) -> list[int] | None:
     if raw in (None, "", "unknown", "unavailable"):
+        return None
+    if not isinstance(raw, str):
         return None
     try:
         return [int(part.strip()) - 1 for part in raw.split(";")]

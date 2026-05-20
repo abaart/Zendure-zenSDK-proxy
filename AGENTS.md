@@ -106,6 +106,12 @@ The zip must not contain `apps/`, `Zendure-zenSDK-proxy/`, `examples/`, `apps.ya
 
 Commit, push `main`, tag, push the tag, and create the GitHub release:
 
+Release notes must start with a clear reminder that users must restart AppDaemon manually after updating through HACS. Put the reminder at the very top of the release notes before `## Problem statement`, for example:
+
+```markdown
+**Important:** After updating through HACS, restart the AppDaemon add-on manually. HACS updates the files, but HACS does not restart AppDaemon.
+```
+
 ```bash
 git add <changed-files>
 git commit -m "<message>"
