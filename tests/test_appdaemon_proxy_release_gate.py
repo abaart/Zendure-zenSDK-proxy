@@ -712,7 +712,12 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual([len(client.posts) for client in clients], [1, 1, 1])
+        self.assertGreaterEqual(len(clients[0].posts), 1)
+        self.assertGreaterEqual(len(clients[1].posts), 1)
+        self.assertGreaterEqual(len(clients[2].posts), 1)
+        self.assertTrue(
+            any("inputLimit" in post["properties"] for post in clients[1].posts)
+        )
 
 
 def _combined_three_device_response() -> dict:

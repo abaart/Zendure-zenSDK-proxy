@@ -5,7 +5,10 @@ import sys
 import types
 from typing import Any
 
-import pytest
+try:
+    import pytest
+except ModuleNotFoundError:
+    pytest = None
 
 
 APP_DIR = Path(__file__).resolve().parents[1] / "apps" / "Zendure-zenSDK-proxy"
@@ -159,6 +162,7 @@ def device_response(idx: int, sn: str, **overrides: Any) -> dict:
     }
 
 
-@pytest.fixture
-def fake_clients():
-    return [FakeDeviceClient() for _idx in range(3)]
+if pytest is not None:
+    @pytest.fixture
+    def fake_clients():
+        return [FakeDeviceClient() for _idx in range(3)]
