@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 from pathlib import Path
 import time
 from typing import Optional
@@ -190,11 +191,19 @@ class ZendureProxy(hass.Hass):
             }
             self.set_state(
                 entity_id,
-                state=state,
+                state=self._ha_sensor_state(state),
                 attributes=sensor_attributes,
                 replace=True,
                 check_existence=False,
             )
+
+    @staticmethod
+    def _ha_sensor_state(value) -> str:
+        if value is None:
+            return "unknown"
+        if isinstance(value, float) and not math.isfinite(value):
+            return "unknown"
+        return str(value)
 
     # ── HTTP server ────────────────────────────────────────────────────────────
 

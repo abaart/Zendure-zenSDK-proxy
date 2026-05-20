@@ -259,6 +259,7 @@ Metrics:
 - `metrics_ha_sensors_enabled` defaults to true.
 - `ZendureProxy._publish_metrics_sensors()` publishes metrics through AppDaemon `set_state(...)`.
 - `ZendureProxy._publish_metrics_sensors()` passes `replace=True` to `set_state(...)` and `MetricsRegistry.flat_ha_sensors()` does not set `state_class`, because Home Assistant can reject dynamic AppDaemon state writes with `400 Bad Request` when the payload contains long-term-statistics metadata or old read-only attributes.
+- `ZendureProxy._publish_metrics_sensors()` passes state values through `ZendureProxy._ha_sensor_state(...)`, because AppDaemon can omit falsy numeric states such as `0` from the Home Assistant state payload.
 - `metrics_ha_sensors_interval` defaults to 30 seconds, so Home Assistant is not updated on every request.
 - `ZendureProxy._metrics_dashboard(...)` renders `/app/zendure_proxy_metrics`.
 
