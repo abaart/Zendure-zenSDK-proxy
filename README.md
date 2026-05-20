@@ -25,6 +25,8 @@ HACS downloadt de AppDaemon code naar de Home Assistant configuratiemap onder `a
 
 Als AppDaemon als Home Assistant add-on draait, gebruik dan vanuit Home Assistant Core de interne add-on hostnaam `a0d7b954-appdaemon`. Gebruik `localhost:8120` alleen wanneer de caller in dezelfde container als AppDaemon draait.
 
+Na een HACS update van `Zendure zenSDK Proxy`: herstart AppDaemon. HACS vervangt de Python bestanden, maar HACS herstart de AppDaemon add-on niet zelf.
+
 ### AppDaemon configuratie
 
 De AppDaemon entry point is `apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
@@ -140,6 +142,50 @@ POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
 ```
 
 De oude URLs op `8120` blijven bestaan voor installaties waarin de caller de AppDaemon containerpoort direct kan bereiken.
+
+### Testen vanuit HA Terminal
+
+Gebruik vanuit de Home Assistant Terminal add-on de interne AppDaemon add-on hostnaam. Gebruik hier niet `127.0.0.1`, want `127.0.0.1` verwijst vanuit de Terminal add-on naar de Terminal container en niet naar de AppDaemon container.
+
+Test de standaard report URL:
+
+```bash
+curl -i http://a0d7b954-appdaemon:8120/properties/report
+```
+
+Test de `/endpoint` report URL die Gielz meestal gebruikt:
+
+```bash
+curl -i http://a0d7b954-appdaemon:8120/endpoint/properties/report
+```
+
+Test de AppDaemon API report endpoint:
+
+```bash
+curl -i http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+```
+
+Test een POST request zonder echt vermogen te vragen:
+
+```bash
+curl -i \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"ping":"pong"}' \
+  http://a0d7b954-appdaemon:8120/properties/write
+```
+
+Test dezelfde POST request via `/endpoint`:
+
+```bash
+curl -i \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"ping":"pong"}' \
+  http://a0d7b954-appdaemon:8120/endpoint/properties/write
+```
+
+Een werkende GET geeft een HTTP response van de proxy terug. Een fout zoals `Failed to connect to 127.0.0.1 port 8120` betekent dat de test naar de verkeerde container wijst.
 
 ### Release naar HACS
 
