@@ -16,6 +16,12 @@ For Home Assistant automations, the proxy also registers AppDaemon API endpoints
 
 The proxy talks to one, two, or three Zendure devices and returns one combined response to Home Assistant.
 
+The proxy also writes its own rotating logfile and exposes a small AppDaemon UI log page:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
+```
+
 ## Installation
 
 1. Install and start AppDaemon.

@@ -70,6 +70,15 @@ zendure_proxy:
 
   solar_power_info: false
   manual_mode_repeat: true
+
+  log_file_enabled: true
+  log_file_path: ""
+  log_file_max_bytes: 1000000
+  log_file_backup_count: 5
+
+  log_dashboard_enabled: true
+  log_dashboard_route: "zendure_proxy_logs"
+  log_dashboard_lines: 300
 ```
 
 Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
@@ -142,6 +151,62 @@ POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
 ```
 
 De oude URLs op `8120` blijven bestaan voor installaties waarin de caller de AppDaemon containerpoort direct kan bereiken.
+
+### Logging
+
+`ZendureProxy` schrijft eigen logregels naar de standaard AppDaemon log en naar een roterende logfile.
+
+Standaard logfile:
+
+```text
+<appdaemon-config-dir>/logs/zendure_proxy.log
+```
+
+Laat `log_file_path` leeg om deze standaardlocatie te gebruiken. Vul `log_file_path` alleen wanneer je zelf een ander absoluut pad wilt gebruiken.
+
+De roterende logfile gebruikt deze instellingen:
+
+```yaml
+log_file_enabled: true
+log_file_path: ""
+log_file_max_bytes: 1000000
+log_file_backup_count: 5
+```
+
+`log_file_max_bytes` bepaalt de maximale grootte van `zendure_proxy.log`. `log_file_backup_count` bepaalt hoeveel oude bestanden bewaard blijven, zoals `zendure_proxy.log.1` en `zendure_proxy.log.2`.
+
+De AppDaemon UI logpagina gebruikt deze instellingen:
+
+```yaml
+log_dashboard_enabled: true
+log_dashboard_route: "zendure_proxy_logs"
+log_dashboard_lines: 300
+```
+
+Open de logpagina via de AppDaemon UI:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
+```
+
+De logpagina toont de laatste `log_dashboard_lines` regels en heeft een downloadlink voor de huidige logfile plus de rotatiebestanden.
+
+De proxy schrijft waarschuwingen wanneer queue cleanup wordt uitgevoerd:
+
+```text
+Queue cleanup: coalesced 3 queued GET requests into 1 upstream GET
+Queue cleanup: deduplicated 2 queued POST requests
+```
+
+De eerste waarschuwing betekent dat meerdere wachtende GET requests hetzelfde gecombineerde Zendure antwoord krijgen. De tweede waarschuwing betekent dat meerdere wachtende POST requests met dezelfde property keys zijn teruggebracht tot de nieuwste POST request.
+
+### Queue model
+
+De proxy heeft twee lagen voor requestverwerking.
+
+`RequestQueue` in `zendure_proxy_queue.py` verwerkt inkomende Home Assistant requests. `RequestQueue` bundelt gelijktijdige GET requests en dedupliceert wachtende POST requests met dezelfde property keys.
+
+Elke `DeviceClient` in `zendure_proxy_device_client.py` heeft een eigen uitgaande `asyncio.Queue`. Er is dus een aparte uitgaande queue per fysiek Zendure device. De worker van `DeviceClient` stuurt maximaal een request tegelijk naar hetzelfde Zendure IP-adres.
 
 ### Testen vanuit HA Terminal
 

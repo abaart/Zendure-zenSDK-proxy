@@ -47,6 +47,23 @@ class Config:
     solar_power_info: bool = False
     manual_mode_repeat: bool = True
 
+    # Rotating file log and AppDaemon UI dashboard
+    log_file_enabled: bool = True
+    log_file_path: str = ""
+    log_file_max_bytes: int = 1_000_000
+    log_file_backup_count: int = 5
+    log_dashboard_enabled: bool = True
+    log_dashboard_route: str = "zendure_proxy_logs"
+    log_dashboard_lines: int = 300
+
+
+def _bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
 
 def load_config(args: dict) -> Config:
     raw = [
@@ -62,15 +79,22 @@ def load_config(args: dict) -> Config:
         single_mode_lower_pct=int(args.get("single_mode_lowerlimit_percent", 40)),
         device_change_diff=int(args.get("single_mode_change_device_diff", 5)),
         standby_timer=int(args.get("single_mode_delayed_standby_timer", 300)),
-        standby_charging=bool(args.get("single_mode_standby_charging_enable", True)),
-        standby_discharging=bool(args.get("single_mode_standby_discharging_enable", True)),
+        standby_charging=_bool(args.get("single_mode_standby_charging_enable", True)),
+        standby_discharging=_bool(args.get("single_mode_standby_discharging_enable", True)),
         transition_timer=int(args.get("singlemode_transition_timer", 40)),
         balancing_factor=int(args.get("balancing_factor", 5)),
-        damper_enable=bool(args.get("dualmode_damper_enable", False)),
+        damper_enable=_bool(args.get("dualmode_damper_enable", False)),
         damper_timer=int(args.get("dualmode_damper_timer", 120)),
         damper_amount=int(args.get("dualmode_damper_amount", 200)),
-        always_dual_mode=bool(args.get("always_dual_mode", False)),
-        equal_mode=bool(args.get("equal_mode", False)),
-        solar_power_info=bool(args.get("solar_power_info", False)),
-        manual_mode_repeat=bool(args.get("manual_mode_repeat", True)),
+        always_dual_mode=_bool(args.get("always_dual_mode", False)),
+        equal_mode=_bool(args.get("equal_mode", False)),
+        solar_power_info=_bool(args.get("solar_power_info", False)),
+        manual_mode_repeat=_bool(args.get("manual_mode_repeat", True)),
+        log_file_enabled=_bool(args.get("log_file_enabled", True)),
+        log_file_path=str(args.get("log_file_path", "")).strip(),
+        log_file_max_bytes=int(args.get("log_file_max_bytes", 1_000_000)),
+        log_file_backup_count=int(args.get("log_file_backup_count", 5)),
+        log_dashboard_enabled=_bool(args.get("log_dashboard_enabled", True)),
+        log_dashboard_route=str(args.get("log_dashboard_route", "zendure_proxy_logs")).strip(),
+        log_dashboard_lines=int(args.get("log_dashboard_lines", 300)),
     )

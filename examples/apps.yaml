@@ -61,3 +61,18 @@ zendure_proxy:
   # Manual-mode power repeat.
   # Re-applies the last power command on every GET cycle.
   manual_mode_repeat: true
+
+  # Rotating file log.
+  # Leave log_file_path empty to write to:
+  #   <appdaemon-config-dir>/logs/zendure_proxy.log
+  log_file_enabled: true
+  log_file_path: ""
+  log_file_max_bytes: 1000000
+  log_file_backup_count: 5
+
+  # AppDaemon UI log dashboard.
+  # Open this URL in the AppDaemon UI:
+  #   http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
+  log_dashboard_enabled: true
+  log_dashboard_route: "zendure_proxy_logs"
+  log_dashboard_lines: 300

@@ -186,6 +186,12 @@ GET  http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
 POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
 ```
 
+The AppDaemon UI log dashboard is:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
+```
+
 The report endpoints call the same internal function:
 
 - `_handle_get()` handles `/properties/report` and `/endpoint/properties/report`.
@@ -230,6 +236,23 @@ curl -i \
 
 After a HACS update, tell users to restart AppDaemon. HACS updates files, but HACS does not restart the AppDaemon add-on.
 
+Logging:
+
+- `ZendureProxy._log(...)` writes to the standard AppDaemon log and to `ProxyFileLogger` when `log_file_enabled` is true.
+- The default rotating file is `<appdaemon-config-dir>/logs/zendure_proxy.log`.
+- `ProxyFileLogger` lives in `zendure_proxy_logging.py`.
+- The AppDaemon UI route is registered with `register_route(self._logs_dashboard, self._cfg.log_dashboard_route)`.
+- The default route is `/app/zendure_proxy_logs`.
+
+Queue behavior:
+
+- `RequestQueue` in `zendure_proxy_queue.py` handles incoming Home Assistant GET/POST batching.
+- `RequestQueue.drain()` coalesces multiple queued GET requests into one upstream GET.
+- `RequestQueue.drain()` deduplicates queued POST requests by property key-set and keeps the latest POST request per key-set.
+- `ZendureProxy._processor()` logs warning lines when GET coalescing or POST deduplication happens.
+- `DeviceClient` in `zendure_proxy_device_client.py` owns one outgoing `asyncio.Queue` per physical Zendure device.
+- `DeviceClient._worker()` serializes outgoing requests so one Zendure IP receives at most one in-flight request.
+
 `ZendureProxy.terminate()` must close runtime resources:
 
 - deregister `_report_endpoint_handle` with `deregister_endpoint(...)`;
@@ -240,4 +263,3 @@ After a HACS update, tell users to restart AppDaemon. HACS updates files, but HA
 - close every `DeviceClient` with `client.close()`.
 
 If AppDaemon stops cleanly, AppDaemon calls `terminate()`. If the container receives `SIGKILL`, Python cannot run cleanup code.
-
