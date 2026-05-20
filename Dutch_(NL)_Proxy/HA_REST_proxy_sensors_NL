@@ -27,6 +27,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Vermogensopdracht Zendure 1"
         value_template: "{{ value_json['properties']['latestPowerCmd_1'] | int }}"
@@ -34,6 +35,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Vermogensopdracht Zendure 2"
         value_template: "{{ value_json['properties']['latestPowerCmd_2'] | int }}"
@@ -41,6 +43,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Vermogensopdracht Zendure 3"
         value_template: "{{ value_json['properties']['latestPowerCmd_3'] | int }}"
@@ -48,6 +51,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Zendure 1 Vermogen Aansturing"
         value_template: >

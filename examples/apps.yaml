@@ -86,3 +86,15 @@ zendure_proxy:
   metrics_dashboard_refresh: 10
   metrics_ha_sensors_enabled: true
   metrics_ha_sensors_interval: 30
+
+  # Proxy response HA sensors.
+  # true publishes sensor.zendure_2_soc_limiet_status,
+  # sensor.zendure_2_serienummer, sensor.dual_mode_demper_status, and related
+  # proxy sensors directly from AppDaemon when no existing entity with the same
+  # entity_id exists.
+  proxy_ha_sensors_enabled: true
+  proxy_ha_sensors_skip_existing: true
+  proxy_ha_sensors_mqtt_discovery_enabled: true
+  proxy_ha_sensors_mqtt_discovery_prefix: "homeassistant"
+  proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
+  proxy_ha_sensors_mqtt_retain: true

@@ -129,6 +129,13 @@ zendure_proxy:
   metrics_dashboard_refresh: 10
   metrics_ha_sensors_enabled: true
   metrics_ha_sensors_interval: 30
+
+  proxy_ha_sensors_enabled: true
+  proxy_ha_sensors_skip_existing: true
+  proxy_ha_sensors_mqtt_discovery_enabled: true
+  proxy_ha_sensors_mqtt_discovery_prefix: "homeassistant"
+  proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
+  proxy_ha_sensors_mqtt_retain: true
 ```
 
 Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
@@ -271,6 +278,17 @@ metrics_ha_sensors_enabled: true
 metrics_ha_sensors_interval: 30
 ```
 
+De proxy response sensors staan ook standaard aan:
+
+```yaml
+proxy_ha_sensors_enabled: true
+proxy_ha_sensors_skip_existing: true
+proxy_ha_sensors_mqtt_discovery_enabled: true
+proxy_ha_sensors_mqtt_discovery_prefix: "homeassistant"
+proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
+proxy_ha_sensors_mqtt_retain: true
+```
+
 Open het metrics dashboard via de AppDaemon UI:
 
 ```text
@@ -301,9 +319,11 @@ Het metrics dashboard toont:
 - per Zendure device de uitgaande GET/POST gemiddelde latency, p95 latency en max latency;
 - per Zendure device de uitgaande queue depth.
 
-De proxy publiceert standaard ook Home Assistant sensors via AppDaemon `set_state()`. De sensors worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
+De proxy publiceert standaard ook Home Assistant metrics via AppDaemon `set_state()`. De metrics worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
 
-De AppDaemon sensors zijn live operationele sensors. `ZendureProxy._publish_metrics_sensors()` zet bewust geen `state_class` attribute via `set_state()`, omdat Home Assistant dynamische AppDaemon state updates met `state_class` in sommige installaties als `400 Bad Request` afwijst. De Prometheus-vriendelijke namen blijven beschikbaar in `MetricsRegistry.prometheus_lines()`, zodat later een `/metrics` endpoint kan worden toegevoegd voor langere bewaartermijnen en externe monitoring.
+`ZendureProxy._publish_metrics_sensors()` publiceert de queue, latency en error metrics. `ZendureProxy._restore_metrics_counters_from_ha()` leest counter sensor states uit Home Assistant bij het starten van AppDaemon. Daardoor tellen `sensor.zendure_proxy_incoming_get_total`, `sensor.zendure_proxy_queue_get_coalesced_total`, en de andere `*_total` counters verder vanaf de laatste Home Assistant state na een AppDaemon restart.
+
+`MetricsRegistry.flat_ha_sensors()` zet `state_class: total_increasing` alleen op counter sensors. Gewone meetwaarden zoals p95 latency, queue depth en error rate krijgen geen `state_class: total_increasing`.
 
 Voorbeelden van sensors:
 
@@ -311,11 +331,15 @@ Voorbeelden van sensors:
 sensor.zendure_proxy_uptime
 sensor.zendure_proxy_incoming_get_p95_ms
 sensor.zendure_proxy_incoming_post_p95_ms
+sensor.zendure_proxy_incoming_get_total
+sensor.zendure_proxy_incoming_post_total
 sensor.zendure_proxy_incoming_get_error_rate
 sensor.zendure_proxy_incoming_post_error_rate
 sensor.zendure_proxy_queue_get_depth
 sensor.zendure_proxy_queue_post_depth
 sensor.zendure_proxy_queue_cleanup_total
+sensor.zendure_proxy_queue_get_coalesced_total
+sensor.zendure_proxy_queue_post_deduplicated_total
 sensor.zendure_proxy_device_1_queue_depth
 sensor.zendure_proxy_device_1_get_p95_ms
 sensor.zendure_proxy_device_1_post_p95_ms
@@ -324,7 +348,36 @@ sensor.zendure_proxy_device_1_error_rate
 
 Voor een 2- of 3-device setup worden ook `device_2` en `device_3` sensors aangemaakt.
 
-De metrics code staat in `zendure_proxy_metrics.py`. De metric namen zijn bewust Prometheus-vriendelijk gehouden, zodat later een `/metrics` endpoint toegevoegd kan worden zonder de counters opnieuw te ontwerpen.
+De proxy kan de gewone proxy sensors automatisch in Home Assistant aanmaken. Dat zijn dezelfde soort sensors als de oude REST sensors uit `HA_REST_proxy_sensors_NL` en `HA_REST_proxy_sensors_EN`, maar dan zonder dat je dat sensorblok handmatig hoeft te plakken.
+
+De proxy probeert eerst MQTT discovery. Als MQTT discovery werkt, krijgen de sensors ook een `unique_id`. Daardoor kun je de sensors in Home Assistant via de UI beheren, bijvoorbeeld hernoemen of aan een gebied koppelen.
+
+Kort gezegd: `entity_id` is de naam die je in dashboards en automations ziet, zoals `sensor.zendure_2_serienummer`. `unique_id` is het vaste interne nummer waarmee Home Assistant weet dat dezelfde sensor na een herstart of update nog steeds dezelfde sensor is. Zonder `unique_id` kan Home Assistant de sensorwaarde wel tonen, maar kun je de sensor meestal niet netjes beheren via de UI.
+
+MQTT discovery werkt alleen wanneer je Home Assistant installatie MQTT heeft. Je hebt daarvoor een MQTT broker nodig, de Home Assistant MQTT integration, en de AppDaemon MQTT plugin. Niet iedere installatie heeft MQTT al ingesteld.
+
+Heeft jouw installatie geen MQTT, dan maakt de proxy de sensors alsnog aan via AppDaemon. Die sensors werken dan gewoon voor dashboards en automations, maar Home Assistant toont bij die sensors geen `unique_id`. Dat is een beperking van Home Assistant: een gebruiker kan zelf geen `unique_id` toevoegen aan een entity die zonder `unique_id` is aangemaakt.
+
+Wil je zeker `unique_id` zonder MQTT? Gebruik dan de oude REST sensor YAML. De automatische AppDaemon fallback is vooral bedoeld om sensorwaarden zonder handmatige installatie beschikbaar te maken.
+
+Voorbeelden van proxy response sensors:
+
+```text
+sensor.zendure_2_soc_limiet_status
+sensor.zendure_2_serienummer
+sensor.dual_mode_demper_status
+sensor.vermogensopdracht_zendure_2
+sensor.zendure_actief_device
+sensor.zendure_proxy_versie
+```
+
+`proxy_ha_sensors_skip_existing: true` betekent: als je de oude REST sensors al hebt, laat de proxy die bestaande sensors met rust. Daardoor blijven bestaande installaties werken na een update.
+
+Nieuwe installaties zonder oude REST sensor YAML krijgen de proxy sensors automatisch. Als MQTT werkt, krijgen de nieuwe sensors een `unique_id`. Als MQTT niet werkt, krijgen de nieuwe sensors geen `unique_id`, maar de sensorwaarden komen wel binnen.
+
+Wil je op een bestaande installatie overstappen van oude REST sensors naar automatische MQTT discovery sensors, verwijder dan eerst de oude REST sensor YAML voor dezelfde entity_id's uit Home Assistant. Verwijder daarna oude REST sensor entity registry entries wanneer Home Assistant de oude REST entities als unavailable laat staan. Gebruik niet tegelijk oude REST sensors en MQTT discovery sensors voor dezelfde entity_id's, want Home Assistant maakt dan dubbele namen zoals `sensor.zendure_2_serienummer_2`.
+
+De metrics code staat in `zendure_proxy_metrics.py`. De proxy response sensor code staat in `zendure_proxy_ha_sensors.py`.
 
 ### Queue model
 
@@ -377,6 +430,69 @@ curl -i \
 ```
 
 Een werkende GET geeft een HTTP response van de proxy terug. Een fout zoals `Failed to connect to 127.0.0.1 port 8120` betekent dat de test naar de verkeerde container wijst.
+
+### Overstappen van Node-RED naar AppDaemon
+
+Deze stappen zijn bedoeld voor gebruikers die de Node-RED proxy al hebben draaien en willen overstappen naar de AppDaemon/Python versie.
+
+1. Maak eerst een backup van Home Assistant.
+
+2. Noteer de IP-adressen van je Zendure devices uit het Node-RED blok `Vul hier de Zendure IP adressen in`.
+
+3. Installeer AppDaemon en installeer daarna `Zendure zenSDK Proxy` via HACS zoals beschreven onder [AppDaemon via HACS](#appdaemon-via-hacs).
+
+4. Open je AppDaemon `apps.yaml` en voeg de `zendure_proxy` configuratie toe uit [`examples/apps.yaml`](examples/apps.yaml).
+
+5. Vul in `apps.yaml` dezelfde Zendure IP-adressen in die nu in Node-RED staan:
+
+```yaml
+ip_zendure_1: "192.168.x.x"
+ip_zendure_2: "192.168.x.y"
+ip_zendure_3: ""
+```
+
+6. Laat `proxy_ha_sensors_skip_existing: true` staan wanneer je de oude REST sensors al hebt. De AppDaemon proxy laat bestaande REST sensors dan met rust.
+
+7. Herstart AppDaemon.
+
+8. Controleer in de AppDaemon log of de proxy gestart is. Je zoekt naar regels zoals:
+
+```text
+Zendure proxy ... started
+Device 1 SN:
+Device 2 SN:
+```
+
+9. Test de AppDaemon proxy vanuit de Home Assistant Terminal add-on:
+
+```bash
+curl -i http://a0d7b954-appdaemon:8120/endpoint/properties/report
+```
+
+Een werkende test geeft `HTTP/1.1 200 OK` en een JSON response terug.
+
+10. Pas in het Gielz dashboard het veld `Zendure 2400 AC IP-adres` aan van de Node-RED URL naar:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Gebruik niet `localhost:8120/endpoint` wanneer AppDaemon als Home Assistant add-on draait. `localhost` wijst vanuit Home Assistant Core niet naar de AppDaemon add-on.
+
+11. Controleer in de AppDaemon log of Home Assistant de nieuwe proxy gebruikt. Je zoekt naar regels zoals:
+
+```text
+GET /endpoint/properties/report HTTP/1.1" 200
+POST /endpoint/properties/write HTTP/1.1" 200
+```
+
+12. Test daarna een veilige stand in Gielz, bijvoorbeeld een lage laad- of ontlaadopdracht. Controleer of `sensor.vermogensopdracht_zendure_1`, `sensor.vermogensopdracht_zendure_2`, en eventueel `sensor.vermogensopdracht_zendure_3` blijven updaten.
+
+13. Laat Node-RED nog even geïnstalleerd staan, maar zorg dat Gielz niet meer naar Node-RED wijst. Als de AppDaemon proxy stabiel werkt, kun je de Node-RED flow uitschakelen of verwijderen.
+
+14. Verwijder de oude REST sensors alleen als je bewust wilt overstappen naar automatische proxy sensors. Laat de oude REST sensors staan wanneer je `unique_id` via YAML wilt behouden of wanneer je geen MQTT gebruikt.
+
+Kort samengevat: eerst AppDaemon werkend maken, daarna pas het Gielz IP-adres wijzigen, en Node-RED pas uitzetten nadat je `GET ... 200` en `POST ... 200` in de AppDaemon log ziet.
 
 ### Release naar HACS
 
@@ -1026,7 +1142,7 @@ Daarnaast wisselen ze van actief device als het verschil in SoC >=5% wordt. En a
 
 ## Versie ##
 
-Huidige versie: 20260512
+Huidige versie: 20260520
 <br/>
 
 # Release-notes #
@@ -1268,3 +1384,9 @@ Huidige versie: 20260512
   <br/>
   
   De debug trace pagina's zijn bereikbaar via het hamburgermenu linksboven of rechtstreeks via `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxylivedataget` en `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxylivedatapost` (eventueel zonder "/endpoint", afhankelijk van de installatie).
+
+## Nieuw in versie 20260520 ##
+- De AppDaemon/Python proxy levert nu dezelfde REST velden als de Node-RED GET response voor de proxy sensors, waaronder `socLimit_1`, `socLimit_2`, `socLimit_3`, `sn_1`, `sn_2`, `sn_3`, `dualModeDamper`, `equalMode`, `alwaysDualMode`, `outputPackPower_1`, `packInputPower_1`, en `batCalTime_1`.
+- De AppDaemon/Python proxy kan proxy sensors automatisch publiceren. Met MQTT discovery krijgen nieuwe sensors een `unique_id`; zonder MQTT maakt AppDaemon de sensorwaarden alsnog aan zonder `unique_id`.
+- De metrics counters lezen bij een AppDaemon restart hun laatste Home Assistant state terug en tellen daarna verder.
+- De README heeft een eenvoudige overstapprocedure gekregen voor gebruikers die van Node-RED naar AppDaemon willen gaan.

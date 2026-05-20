@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import math
 from pathlib import Path
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 import aiohttp.web
@@ -26,8 +27,10 @@ import appdaemon.plugins.hass.hassapi as hass
 from zendure_proxy_config import Config, load_config
 from zendure_proxy_device_client import DeviceClient
 from zendure_proxy_get_handler import execute_get
+from zendure_proxy_ha_sensors import build_proxy_ha_sensors
 from zendure_proxy_logging import ProxyFileLogger, render_log_dashboard
 from zendure_proxy_metrics import MetricsRegistry, render_metrics_dashboard
+from zendure_proxy_mqtt_discovery import mqtt_sensor_config, mqtt_sensor_topics
 from zendure_proxy_post_handler import execute_post
 from zendure_proxy_power import PROXY_VERSION, now
 from zendure_proxy_queue import RequestQueue
@@ -42,7 +45,11 @@ class ZendureProxy(hass.Hass):
     async def initialize(self) -> None:
         self._cfg: Config = load_config(self.args)
         self._file_logger: Optional[ProxyFileLogger] = self._create_file_logger()
+        self._mqtt_api = self._get_mqtt_api()
+        self._mqtt_sensor_error_logged = False
         self._metrics = MetricsRegistry(len(self._cfg.device_ips))
+        self._proxy_ha_sensor_owned_entities: set[str] = set()
+        self._restore_metrics_counters_from_ha()
 
         self._clients: list[DeviceClient] = [
             DeviceClient(ip, self._proxy_log, self._metrics, idx)
@@ -143,6 +150,19 @@ class ZendureProxy(hass.Hass):
         if self._file_logger is not None:
             self._file_logger.log(message, level)
 
+    def _get_mqtt_api(self):
+        if not self._cfg.proxy_ha_sensors_mqtt_discovery_enabled:
+            return None
+        try:
+            return self.get_plugin_api("MQTT")
+        except Exception as exc:
+            self.log(
+                "Could not start MQTT discovery for Zendure proxy sensors; "
+                f"falling back to AppDaemon set_state sensors: {exc}",
+                level="WARNING",
+            )
+            return None
+
     async def _logs_dashboard(
         self, request: aiohttp.web.Request, _kwargs
     ) -> aiohttp.web.Response:
@@ -197,6 +217,118 @@ class ZendureProxy(hass.Hass):
                 check_existence=False,
             )
 
+    def _publish_proxy_ha_sensors(self, response: dict) -> None:
+        if not self._cfg.proxy_ha_sensors_enabled:
+            return
+
+        try:
+            battery_order = self.get_state("input_text.zendure_2400_ac_batterij_volgorde")
+        except Exception:
+            battery_order = None
+
+        updated_at = str(int(time.time()))
+        for entity_id, (state, attributes) in build_proxy_ha_sensors(
+            response, battery_order
+        ).items():
+            existing_state = self._get_entity_state(entity_id)
+            owned = self._entity_is_proxy_managed(entity_id, existing_state)
+            if (
+                self._cfg.proxy_ha_sensors_skip_existing
+                and entity_id not in self._proxy_ha_sensor_owned_entities
+                and existing_state is not None
+                and not owned
+            ):
+                continue
+            if self._mqtt_api is not None:
+                try:
+                    self._publish_proxy_mqtt_sensor(
+                        entity_id, state, attributes, response, updated_at
+                    )
+                    self._proxy_ha_sensor_owned_entities.add(entity_id)
+                    continue
+                except Exception as exc:
+                    if not self._mqtt_sensor_error_logged:
+                        self._proxy_log(
+                            "MQTT discovery publish failed for Zendure proxy sensors; "
+                            f"using AppDaemon set_state fallback: {exc}",
+                            level="WARNING",
+                        )
+                        self._mqtt_sensor_error_logged = True
+            self.set_state(
+                entity_id,
+                state=self._ha_sensor_state(state),
+                attributes={
+                    **attributes,
+                    "proxy_updated_at": updated_at,
+                    "zendure_proxy_managed": True,
+                },
+                replace=True,
+                check_existence=False,
+            )
+            self._proxy_ha_sensor_owned_entities.add(entity_id)
+
+    def _publish_proxy_mqtt_sensor(
+        self,
+        entity_id: str,
+        state,
+        attributes: dict[str, Any],
+        response: dict,
+        updated_at: str,
+    ) -> None:
+        if self._mqtt_api is None:
+            return
+
+        sensor_attributes = {
+            **attributes,
+            "proxy_updated_at": updated_at,
+            "proxy_version": response.get("proxyVersion", PROXY_VERSION),
+            "zendure_proxy_managed": True,
+        }
+        discovery_topic, state_topic, attrs_topic = mqtt_sensor_topics(
+            entity_id,
+            self._cfg.proxy_ha_sensors_mqtt_discovery_prefix,
+            self._cfg.proxy_ha_sensors_mqtt_state_prefix,
+        )
+        config = mqtt_sensor_config(
+            entity_id,
+            sensor_attributes,
+            self._cfg.proxy_ha_sensors_mqtt_discovery_prefix,
+            self._cfg.proxy_ha_sensors_mqtt_state_prefix,
+        )
+        retain = self._cfg.proxy_ha_sensors_mqtt_retain
+        self._mqtt_api.mqtt_publish(
+            discovery_topic,
+            json.dumps(config, ensure_ascii=False),
+            retain=retain,
+        )
+        self._mqtt_api.mqtt_publish(
+            state_topic,
+            self._ha_sensor_state(state),
+            retain=retain,
+        )
+        self._mqtt_api.mqtt_publish(
+            attrs_topic,
+            json.dumps(sensor_attributes, ensure_ascii=False),
+            retain=retain,
+        )
+
+    def _get_entity_state(self, entity_id: str):
+        try:
+            state = self.get_state(entity_id, attribute="all")
+        except Exception:
+            return None
+        if state is None:
+            return None
+        return state if isinstance(state, dict) else {"state": state, "attributes": {}}
+
+    def _entity_is_proxy_managed(self, entity_id: str, state: dict | None) -> bool:
+        if entity_id in self._proxy_ha_sensor_owned_entities:
+            return True
+        if state is None:
+            return False
+        attributes = state.get("attributes", {})
+        return attributes.get("zendure_proxy_managed") is True
+
     @staticmethod
     def _ha_sensor_state(value) -> str:
         if value is None:
@@ -204,6 +336,23 @@ class ZendureProxy(hass.Hass):
         if isinstance(value, float) and not math.isfinite(value):
             return "unknown"
         return str(value)
+
+    def _restore_metrics_counters_from_ha(self) -> None:
+        if not self._cfg.metrics_enabled or not self._cfg.metrics_ha_sensors_enabled:
+            return
+
+        states = {}
+        for entity_id in self._metrics.counter_sensor_entity_ids():
+            try:
+                states[entity_id] = self.get_state(entity_id)
+            except Exception as exc:
+                self._proxy_log(
+                    f"Could not restore metric counter {entity_id}: {exc}",
+                    level="WARNING",
+                )
+        restored = self._metrics.restore_counters_from_sensors(states)
+        if restored:
+            self._proxy_log(f"Restored {restored} metric counters from Home Assistant")
 
     # ── HTTP server ────────────────────────────────────────────────────────────
 
@@ -263,6 +412,7 @@ class ZendureProxy(hass.Hass):
             if not all(d.sn for d in self._state.devices):
                 if self._state.last_get_response:
                     status = 200
+                    self._publish_proxy_ha_sensors(self._state.last_get_response)
                     return self._state.last_get_response, status
                 status = 503
                 return {"error": "Initializing - try again shortly"}, status
@@ -273,11 +423,13 @@ class ZendureProxy(hass.Hass):
                 data = await asyncio.wait_for(fut, timeout=30.0)
                 self._state.counter_get_replies += 1
                 status = 200
+                self._publish_proxy_ha_sensors(data)
                 return data, status
             except asyncio.TimeoutError:
                 timeout = True
                 if self._state.last_get_response:
                     status = 200
+                    self._publish_proxy_ha_sensors(self._state.last_get_response)
                     return self._state.last_get_response, status
                 status = 504
                 return {"error": "Upstream timeout"}, status
@@ -285,6 +437,7 @@ class ZendureProxy(hass.Hass):
                 self._proxy_log(f"GET handler error: {exc}", level="ERROR")
                 if self._state.last_get_response:
                     status = 200
+                    self._publish_proxy_ha_sensors(self._state.last_get_response)
                     return self._state.last_get_response, status
                 status = 502
                 return {"error": str(exc)}, status

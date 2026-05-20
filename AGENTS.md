@@ -205,6 +205,8 @@ The report endpoints call the same internal function:
 - `_handle_get()` handles `/properties/report` and `/endpoint/properties/report`.
 - `_api_report()` handles `/api/appdaemon/zendure_proxy_report`.
 - Both call `_execute_report_request()`.
+- `build_combined_response()` must preserve REST compatibility fields used by `HA_REST_proxy_sensors_NL` and `HA_REST_proxy_sensors_EN`: `properties.socLimit_1`, `properties.socLimit_2`, `properties.socLimit_3`, top-level `sn_1`, top-level `sn_2`, top-level `sn_3`, top-level `product_1`, top-level `product_2`, top-level `product_3`, `properties.dualModeDamper`, `properties.equalMode`, `properties.alwaysDualMode`, `properties.outputPackPower_1`, `properties.outputPackPower_2`, `properties.outputPackPower_3`, `properties.packInputPower_1`, `properties.packInputPower_2`, `properties.packInputPower_3`, `properties.batCalTime_1`, `properties.batCalTime_2`, and `properties.batCalTime_3`.
+- `build_combined_response()` must publish `properties.activeDevice` as a bitmask where bit 0 is Zendure 1, bit 1 is Zendure 2, and bit 2 is Zendure 3. `0` means no active Zendure.
 
 The write endpoints call the same internal function:
 
@@ -260,8 +262,16 @@ Metrics:
 - `MetricsRegistry.prometheus_lines()` returns Prometheus-style text lines for a future `/metrics` endpoint.
 - `metrics_ha_sensors_enabled` defaults to true.
 - `ZendureProxy._publish_metrics_sensors()` publishes metrics through AppDaemon `set_state(...)`.
-- `ZendureProxy._publish_metrics_sensors()` passes `replace=True` to `set_state(...)` and `MetricsRegistry.flat_ha_sensors()` does not set `state_class`, because Home Assistant can reject dynamic AppDaemon state writes with `400 Bad Request` when the payload contains long-term-statistics metadata or old read-only attributes.
+- `ZendureProxy._publish_metrics_sensors()` passes `replace=True` to `set_state(...)`.
+- `MetricsRegistry.flat_ha_sensors()` sets `state_class: total_increasing` only on counter sensors such as `sensor.zendure_proxy_incoming_get_total` and `sensor.zendure_proxy_queue_get_coalesced_total`.
 - `ZendureProxy._publish_metrics_sensors()` passes state values through `ZendureProxy._ha_sensor_state(...)`, because AppDaemon can omit falsy numeric states such as `0` from the Home Assistant state payload.
+- `ZendureProxy._restore_metrics_counters_from_ha()` reads existing Home Assistant counter sensor states at startup and passes them to `MetricsRegistry.restore_counters_from_sensors(...)`.
+- `ZendureProxy._publish_proxy_ha_sensors(...)` publishes automatic proxy response sensors from `build_proxy_ha_sensors(...)`.
+- `proxy_ha_sensors_enabled` defaults to `true`.
+- `proxy_ha_sensors_skip_existing` defaults to `true`; with that setting, `ZendureProxy._publish_proxy_ha_sensors(...)` skips an entity_id when Home Assistant already has a REST sensor with the same entity_id.
+- `proxy_ha_sensors_mqtt_discovery_enabled` defaults to `true`; with that setting, `ZendureProxy._publish_proxy_mqtt_sensor(...)` publishes MQTT discovery payloads with `unique_id` only when the AppDaemon MQTT plugin is available.
+- MQTT discovery requires a working MQTT broker, a configured Home Assistant MQTT integration, and a configured AppDaemon MQTT plugin. MQTT discovery is not guaranteed on every Home Assistant installation.
+- AppDaemon `set_state(...)` fallback sensors do not get a Home Assistant `unique_id`. Keep REST sensor YAML when entity registry `unique_id` behavior is required and MQTT is not available.
 - `metrics_ha_sensors_interval` defaults to 30 seconds, so Home Assistant is not updated on every request.
 - `ZendureProxy._metrics_dashboard(...)` renders `/app/zendure_proxy_metrics`.
 

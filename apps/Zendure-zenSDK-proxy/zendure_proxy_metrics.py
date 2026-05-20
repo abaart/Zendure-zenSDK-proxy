@@ -22,6 +22,10 @@ def _pct(values: list[float], percentile: float) -> float:
     return ordered[idx]
 
 
+def _counter_attrs() -> dict[str, str]:
+    return {"state_class": "total_increasing"}
+
+
 @dataclass
 class LatencySamples:
     samples: deque[tuple[float, float]] = field(default_factory=lambda: deque(maxlen=1000))
@@ -208,9 +212,33 @@ class MetricsRegistry:
             round(snap["incoming"]["GET"]["latency"]["p95"], 1),
             {"unit_of_measurement": "ms"},
         )
+        sensors["sensor.zendure_proxy_incoming_get_total"] = (
+            snap["incoming"]["GET"]["total"],
+            _counter_attrs(),
+        )
+        sensors["sensor.zendure_proxy_incoming_get_errors_total"] = (
+            snap["incoming"]["GET"]["errors"],
+            _counter_attrs(),
+        )
+        sensors["sensor.zendure_proxy_incoming_get_timeouts_total"] = (
+            snap["incoming"]["GET"]["timeouts"],
+            _counter_attrs(),
+        )
         sensors["sensor.zendure_proxy_incoming_post_p95_ms"] = (
             round(snap["incoming"]["POST"]["latency"]["p95"], 1),
             {"unit_of_measurement": "ms"},
+        )
+        sensors["sensor.zendure_proxy_incoming_post_total"] = (
+            snap["incoming"]["POST"]["total"],
+            _counter_attrs(),
+        )
+        sensors["sensor.zendure_proxy_incoming_post_errors_total"] = (
+            snap["incoming"]["POST"]["errors"],
+            _counter_attrs(),
+        )
+        sensors["sensor.zendure_proxy_incoming_post_timeouts_total"] = (
+            snap["incoming"]["POST"]["timeouts"],
+            _counter_attrs(),
         )
         sensors["sensor.zendure_proxy_incoming_get_error_rate"] = (
             round(snap["incoming"]["GET"]["window"]["error_rate"], 2),
@@ -231,7 +259,15 @@ class MetricsRegistry:
         sensors["sensor.zendure_proxy_queue_cleanup_total"] = (
             snap["queue"]["get_coalesced_requests_total"]
             + snap["queue"]["post_deduplicated_requests_total"],
-            {},
+            _counter_attrs(),
+        )
+        sensors["sensor.zendure_proxy_queue_get_coalesced_total"] = (
+            snap["queue"]["get_coalesced_requests_total"],
+            _counter_attrs(),
+        )
+        sensors["sensor.zendure_proxy_queue_post_deduplicated_total"] = (
+            snap["queue"]["post_deduplicated_requests_total"],
+            _counter_attrs(),
         )
 
         for device in snap["devices"]:
@@ -244,9 +280,21 @@ class MetricsRegistry:
                 round(device["GET"]["latency"]["p95"], 1),
                 {"unit_of_measurement": "ms"},
             )
+            sensors[f"sensor.zendure_proxy_device_{idx}_get_total"] = (
+                device["GET"]["total"],
+                _counter_attrs(),
+            )
             sensors[f"sensor.zendure_proxy_device_{idx}_post_p95_ms"] = (
                 round(device["POST"]["latency"]["p95"], 1),
                 {"unit_of_measurement": "ms"},
+            )
+            sensors[f"sensor.zendure_proxy_device_{idx}_post_total"] = (
+                device["POST"]["total"],
+                _counter_attrs(),
+            )
+            sensors[f"sensor.zendure_proxy_device_{idx}_errors_total"] = (
+                device["GET"]["errors"] + device["POST"]["errors"],
+                _counter_attrs(),
             )
             sensors[f"sensor.zendure_proxy_device_{idx}_error_rate"] = (
                 round(
@@ -266,6 +314,69 @@ class MetricsRegistry:
             )
 
         return sensors
+
+    def counter_sensor_entity_ids(self) -> list[str]:
+        return [entity_id for entity_id, (_, attrs) in self.flat_ha_sensors().items()
+                if attrs.get("state_class") == "total_increasing"]
+
+    def restore_counters_from_sensors(self, states: dict[str, Any]) -> int:
+        restored = 0
+
+        def get_int(entity_id: str) -> int | None:
+            raw = states.get(entity_id)
+            if raw in (None, "", "unknown", "unavailable"):
+                return None
+            try:
+                return max(0, int(float(raw)))
+            except (TypeError, ValueError):
+                return None
+
+        def apply(entity_id: str, setter) -> None:
+            nonlocal restored
+            value = get_int(entity_id)
+            if value is None:
+                return
+            setter(value)
+            restored += 1
+
+        apply("sensor.zendure_proxy_incoming_get_total",
+              lambda value: setattr(self.incoming["GET"], "total", value))
+        apply("sensor.zendure_proxy_incoming_get_errors_total",
+              lambda value: setattr(self.incoming["GET"], "errors", value))
+        apply("sensor.zendure_proxy_incoming_get_timeouts_total",
+              lambda value: setattr(self.incoming["GET"], "timeouts", value))
+        apply("sensor.zendure_proxy_incoming_post_total",
+              lambda value: setattr(self.incoming["POST"], "total", value))
+        apply("sensor.zendure_proxy_incoming_post_errors_total",
+              lambda value: setattr(self.incoming["POST"], "errors", value))
+        apply("sensor.zendure_proxy_incoming_post_timeouts_total",
+              lambda value: setattr(self.incoming["POST"], "timeouts", value))
+        apply("sensor.zendure_proxy_queue_get_coalesced_total",
+              lambda value: setattr(self, "queue_get_coalesced_requests_total", value))
+        apply("sensor.zendure_proxy_queue_post_deduplicated_total",
+              lambda value: setattr(self, "queue_post_deduplicated_requests_total", value))
+
+        cleanup_total = get_int("sensor.zendure_proxy_queue_cleanup_total")
+        if (
+            cleanup_total is not None
+            and cleanup_total > self.queue_get_coalesced_requests_total
+            + self.queue_post_deduplicated_requests_total
+        ):
+            self.queue_get_coalesced_requests_total = cleanup_total
+            restored += 1
+
+        for idx, device in enumerate(self.devices, start=1):
+            apply(f"sensor.zendure_proxy_device_{idx}_get_total",
+                  lambda value, metric=device.get: setattr(metric, "total", value))
+            apply(f"sensor.zendure_proxy_device_{idx}_post_total",
+                  lambda value, metric=device.post: setattr(metric, "total", value))
+            device_errors = get_int(f"sensor.zendure_proxy_device_{idx}_errors_total")
+            if device_errors is not None:
+                device.get.errors = device_errors
+                device.post.errors = 0
+                restored += 1
+
+        return restored
 
     def prometheus_lines(self) -> list[str]:
         """Return simple text metrics that can later power /metrics export."""

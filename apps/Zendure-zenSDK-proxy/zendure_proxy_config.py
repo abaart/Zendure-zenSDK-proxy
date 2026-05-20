@@ -64,6 +64,14 @@ class Config:
     metrics_ha_sensors_enabled: bool = True
     metrics_ha_sensors_interval: int = 30
 
+    # Proxy response Home Assistant sensors
+    proxy_ha_sensors_enabled: bool = True
+    proxy_ha_sensors_skip_existing: bool = True
+    proxy_ha_sensors_mqtt_discovery_enabled: bool = True
+    proxy_ha_sensors_mqtt_discovery_prefix: str = "homeassistant"
+    proxy_ha_sensors_mqtt_state_prefix: str = "zendure_proxy"
+    proxy_ha_sensors_mqtt_retain: bool = True
+
 
 def _bool(value) -> bool:
     if isinstance(value, bool):
@@ -111,4 +119,20 @@ def load_config(args: dict) -> Config:
         metrics_dashboard_refresh=int(args.get("metrics_dashboard_refresh", 10)),
         metrics_ha_sensors_enabled=_bool(args.get("metrics_ha_sensors_enabled", True)),
         metrics_ha_sensors_interval=int(args.get("metrics_ha_sensors_interval", 30)),
+        proxy_ha_sensors_enabled=_bool(args.get("proxy_ha_sensors_enabled", True)),
+        proxy_ha_sensors_skip_existing=_bool(
+            args.get("proxy_ha_sensors_skip_existing", True)
+        ),
+        proxy_ha_sensors_mqtt_discovery_enabled=_bool(
+            args.get("proxy_ha_sensors_mqtt_discovery_enabled", True)
+        ),
+        proxy_ha_sensors_mqtt_discovery_prefix=str(
+            args.get("proxy_ha_sensors_mqtt_discovery_prefix", "homeassistant")
+        ).strip(),
+        proxy_ha_sensors_mqtt_state_prefix=str(
+            args.get("proxy_ha_sensors_mqtt_state_prefix", "zendure_proxy")
+        ).strip(),
+        proxy_ha_sensors_mqtt_retain=_bool(
+            args.get("proxy_ha_sensors_mqtt_retain", True)
+        ),
     )
