@@ -27,6 +27,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Zendure 1 Power Command"
         value_template: "{{ value_json['properties']['latestPowerCmd_1'] | int }}"
@@ -34,6 +35,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Zendure 2 Power Command"
         value_template: "{{ value_json['properties']['latestPowerCmd_2'] | int }}"
@@ -41,6 +43,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Zendure 3 Power Command"
         value_template: "{{ value_json['properties']['latestPowerCmd_3'] | int }}"
@@ -48,6 +51,7 @@
         unit_of_measurement: "W"
         state_class: measurement
         device_class: power
+        force_update: true
 
       - name: "Zendure 1 Power"
         value_template: >

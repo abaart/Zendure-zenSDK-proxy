@@ -1,0 +1,133 @@
+zendure_proxy:
+  module: zendure_proxy
+  class: ZendureProxy
+
+  # Required: IP addresses of your Zendure devices.
+  ip_zendure_1: "192.168.x.x"
+  ip_zendure_2: "192.168.x.y"
+  ip_zendure_3: ""              # Leave empty for a 2-device setup.
+
+  # HTTP server.
+  # The proxy listens on this port inside the AppDaemon container.
+  # Home Assistant Core can normally reach this port via the internal add-on DNS:
+  #   http://a0d7b954-appdaemon:<server_port>/properties/report
+  #   http://a0d7b954-appdaemon:<server_port>/properties/write
+  #
+  # Use these URLs when the caller can reach the AppDaemon container port directly:
+  #   http://<HA-host>:<server_port>/properties/report
+  #   http://<HA-host>:<server_port>/properties/write
+  #
+  # Custom Home Assistant automations can also use AppDaemon's own HTTP API:
+  #   http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+  #   http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
+  server_port: 8120
+  server_host: "0.0.0.0"
+
+  # Timeout in seconds for each HTTP request from AppDaemon to a Zendure device.
+  # This can be higher than Home Assistant's REST timeout because the proxy can
+  # answer HA from cache while the Zendure request continues internally.
+  zendure_request_timeout: 60
+
+  # GET cache and health behavior.
+  # Home Assistant receives a cached GET response after ha_get_response_timeout.
+  # The proxy keeps using cached device data for get_cache_max_age seconds.
+  # A recovered device must have successful outgoing GET requests for
+  # get_recovery_window seconds before it is used for power distribution again.
+  # A degraded device's last measured power is counted for
+  # degraded_power_hold_seconds seconds before the device is treated as dead.
+  ha_get_response_timeout: 8
+  get_cache_max_age: 300
+  get_rate_limit_window: 1
+  get_recovery_window: 30
+  degraded_power_hold_seconds: 1800
+
+  # Mode-switching thresholds.
+  # Above single_mode_upperlimit_percent * maxPower, switch to multi-device mode.
+  # Below single_mode_lowerlimit_percent * maxPower, switch back to single device.
+  single_mode_upperlimit_percent: 100
+  single_mode_lowerlimit_percent: 40
+
+  # Minimum SoC difference (%) before the active single-mode device is rotated.
+  single_mode_change_device_diff: 5
+
+  # Standby (deep sleep) for inactive devices.
+  # After this many seconds of inactivity the passive device receives smartMode=0.
+  single_mode_delayed_standby_timer: 300
+  single_mode_standby_charging_enable: true
+  single_mode_standby_discharging_enable: true
+
+  # Device-switch transition.
+  # Smooth ramp duration in seconds when the active single-mode device changes.
+  singlemode_transition_timer: 40
+
+  # SoC balancing.
+  # Exponent for nonlinear weighting: higher means more aggressive balancing.
+  balancing_factor: 5
+
+  # Dual-mode damper prevents switching around the single-mode threshold.
+  dualmode_damper_enable: false
+  dualmode_damper_timer: 120
+  dualmode_damper_amount: 200
+
+  # Special modes.
+  always_dual_mode: false
+  equal_mode: false
+
+  # Solar power fields.
+  solar_power_info: false
+
+  # Manual-mode power repeat.
+  # Re-applies the last power command on every GET cycle.
+  manual_mode_repeat: true
+
+  # Rotating file log.
+  # Leave log_file_path empty to write to:
+  #   <appdaemon-config-dir>/logs/zendure_proxy.log
+  log_file_enabled: true
+  log_file_path: ""
+  log_file_max_bytes: 1000000
+  log_file_backup_count: 5
+
+  # AppDaemon UI log dashboard.
+  # Open this URL in the AppDaemon UI:
+  #   http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
+  log_dashboard_enabled: true
+  log_dashboard_route: "zendure_proxy_logs"
+  log_dashboard_lines: 300
+
+  # Metrics dashboard and HA sensors.
+  # Open this URL in the AppDaemon UI:
+  #   http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
+  metrics_enabled: true
+  metrics_dashboard_enabled: true
+  metrics_dashboard_route: "zendure_proxy_metrics"
+  metrics_dashboard_refresh: 10
+  metrics_ha_sensors_enabled: true
+  metrics_ha_sensors_interval: 30
+
+  # Proxy response HA sensors.
+  # true publishes sensor.zendure_2_soc_limiet_status,
+  # sensor.zendure_2_serienummer, sensor.dual_mode_demper_status, and related
+  # proxy sensors directly from AppDaemon when no existing entity with the same
+  # entity_id exists.
+  proxy_ha_sensors_enabled: true
+  proxy_ha_sensors_skip_existing: true
+  proxy_ha_sensors_mqtt_discovery_enabled: true
+  proxy_ha_sensors_mqtt_discovery_prefix: "homeassistant"
+  proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
+  proxy_ha_sensors_mqtt_retain: true
+
+  # Node-RED compatibility additions.
+  # true returns HTTP 504 {"error":"Gateway Timeout"} when a required device
+  # has no fresh GET reply, matching the visible Node-RED timeout behavior.
+  node_red_compat_strict_get_errors: true
+
+  # Debug payload capture.
+  # false keeps full GET/POST payloads out of the rotating logfile.
+  debug_payload_capture_enabled: false
+
+  # Diagnostics dashboard.
+  # Open this URL in the AppDaemon UI:
+  #   http://a0d7b954-appdaemon:5050/app/zendure_proxy_diagnostics
+  diagnostics_dashboard_enabled: true
+  diagnostics_dashboard_route: "zendure_proxy_diagnostics"

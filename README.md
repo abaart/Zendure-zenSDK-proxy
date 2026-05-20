@@ -1,5 +1,594 @@
 # Zendure-zenSDK-proxy
 
+> Credit: deze AppDaemon versie bouwt voort op de originele
+> [`Zendure-zenSDK-proxy`](https://github.com/gast777/Zendure-zenSDK-proxy)
+> van Casper Rijnders / `gast777`.
+
+## Credits, upstream en wijzigingen
+
+Deze repository is gebaseerd op de originele
+[`gast777/Zendure-zenSDK-proxy`](https://github.com/gast777/Zendure-zenSDK-proxy)
+van Casper Rijnders.
+
+De originele repository levert een Node-RED proxy voor Gielz/Home Assistant en
+Zendure devices. Die Node-RED proxy verzorgt de interfacing naar meerdere
+Zendure devices, combineert de status naar een virtueel device, verdeelt laad-
+en ontlaadvermogen, en voegt extra monitoring-attributen toe voor Home
+Assistant.
+
+Deze fork voegt een AppDaemon/Python implementatie toe:
+
+- `apps/Zendure-zenSDK-proxy/zendure_proxy.py` start de AppDaemon app en de HTTP endpoints.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_get_handler.py` bouwt het gecombineerde GET antwoord.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_post_handler.py` splitst POST opdrachten per Zendure device.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_power.py` berekent actieve devices en vermogensverdeling.
+- `apps/Zendure-zenSDK-proxy/zendure_proxy_queue.py` verwerkt gelijktijdige GET/POST requests.
+- `hacs.json` en `examples/apps.yaml` maken installatie als AppDaemon app via HACS mogelijk.
+
+Dank aan `gast777` voor het uitzoeken van de Zendure-interfacing, de
+proxy-aanpak, de vermogensverdeling, de monitoring-attributen, de Home Assistant
+voorbeelden, en de vele praktijktests waarop deze AppDaemon versie voortbouwt.
+
+De AppDaemon/Python implementatie heeft drie concrete doelen. HACS moet updates
+voor eindgebruikers makkelijker maken, omdat Home Assistant de AppDaemon app uit
+een release of branch kan installeren zonder handmatig een Node-RED export te
+importeren. `RequestQueue` in `zendure_proxy_queue.py` en de per-device queues in
+`DeviceClient` in `zendure_proxy_device_client.py` moeten Zendure devices
+beschermen tegen te veel gelijktijdige HTTP requests in edge-case situaties. De
+Python bestanden in `apps/Zendure-zenSDK-proxy/` moeten GitHub bijdragen
+makkelijker maken, omdat reviewers normale diffs per module kunnen bekijken in
+plaats van een grote Node-RED JSON export op één regel.
+
+De Node-RED bestanden, de documentatie over de originele proxy-aanpak, en de
+Home Assistant voorbeelden blijven afkomstig van de upstream repository van
+`gast777`, behalve waar deze fork expliciet AppDaemon/HACS documentatie toevoegt.
+De Node-RED implementatie blijft ongewijzigd in deze repository.
+
+## Robuust omgaan met uitval van Zendures
+
+De originele Node-RED versie van `gast777` blijft de basis voor de proxy-aanpak:
+meerdere fysieke Zendures worden zichtbaar als één virtuele Zendure voor Gielz
+en Home Assistant. De AppDaemon/Python versie in `apps/Zendure-zenSDK-proxy/`
+voegt extra gedrag toe voor situaties waarin één fysieke Zendure traag wordt of
+niet meer antwoordt.
+
+In gewone taal:
+
+- Home Assistant REST calls stoppen vaak na ongeveer 10 seconden. De AppDaemon
+  versie probeert daarom binnen `ha_get_response_timeout`, standaard 8 seconden,
+  een antwoord aan Home Assistant te geven.
+- Een trage Zendure request wordt intern niet meteen afgebroken. `DeviceClient`
+  gebruikt `zendure_request_timeout`, standaard 60 seconden. Als de Zendure later
+  alsnog antwoordt, schrijft de proxy die response naar de cache.
+- Als Home Assistant eerder antwoord nodig heeft, stuurt de proxy de laatste
+  bekende goede GET response terug zolang `get_cache_max_age`, standaard 300
+  seconden, nog niet verlopen is.
+  Daardoor blijft de proxy response bruikbaar in Home Assistant bij een korte
+  vertraging of korte uitval van één Zendure, in plaats van dat de volledige
+  proxy response meteen `unavailable` wordt.
+- `sensor.proxy_zendure_pool_healthy` is `Healthy` wanneer alle geconfigureerde
+  Zendures normaal antwoorden. De sensor is `Degraded` wanneer één of meer
+  Zendures niet goed antwoorden.
+- `sensor.zendure_1_health`, `sensor.zendure_2_health`, en
+  `sensor.zendure_3_health` tonen per Zendure `Healthy`, `Degraded`, of `Dead`.
+- Een Zendure wordt `Degraded` wanneer een outgoing GET naar die Zendure geen
+  bruikbare response oplevert. Voorbeelden zijn: geen antwoord binnen
+  `zendure_request_timeout`, standaard 60 seconden, een verbroken verbinding,
+  een HTTP fout, of een response die de proxy niet kan verwerken.
+- Een `Degraded` Zendure krijgt geen POST opdrachten meer. De proxy gaat er
+  tijdelijk wel vanuit dat die Zendure blijft laden of ontladen met het wattage
+  uit de laatste succesvolle GET response. Daardoor kan de proxy het resterende
+  gevraagde wattage naar de gezonde Zendures sturen.
+  Het overslaan van POST opdrachten naar een `Degraded` Zendure ontlast die
+  Zendure, zodat herstel meer kans krijgt. Het overslaan voorkomt ook dat oude
+  POST opdrachten voor die Zendure opstapelen terwijl de verbinding slecht is.
+- `degraded_power_hold_seconds`, standaard 1800 seconden, bepaalt hoe lang de
+  proxy die laatste bekende stand meetelt. Na die periode wordt de Zendure
+  `Dead`, en de proxy gaat er dan vanuit dat die Zendure geen vermogen meer
+  levert of opneemt.
+- Wanneer een uitgevallen Zendure weer succesvolle GET responses geeft, wacht de
+  proxy `get_recovery_window`, standaard 30 seconden, voordat die Zendure weer
+  POST opdrachten krijgt.
+
+Voorbeeld: Home Assistant vraagt 1600 W laden. Zendure 2 is `Degraded`, en de
+laatste succesvolle GET response meldde dat Zendure 2 nog met 500 W laadt. De
+proxy stuurt dan geen POST naar Zendure 2. De proxy verdeelt de resterende
+1100 W over Zendure 1 en Zendure 3, zodat de totale aansturing zo dicht mogelijk
+bij 1600 W blijft.
+
+## AppDaemon via HACS
+
+Deze branch bevat naast de Node-RED flow ook een AppDaemon versie van de proxy.
+
+HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `examples/apps.yaml` toe aan je AppDaemon `apps.yaml`.
+
+### Installatie
+
+1. Installeer en start AppDaemon in Home Assistant.
+2. Open HACS.
+3. Open de HACS configuratie-opties.
+4. Zet `Enable AppDaemon apps discovery & tracking` aan.
+5. Ga naar `Custom repositories`.
+6. Voeg deze GitHub repository toe als type `AppDaemon`.
+7. Installeer `Zendure zenSDK Proxy`.
+8. Open je AppDaemon `apps.yaml`.
+9. Kopieer de `zendure_proxy` configuratie uit [`examples/apps.yaml`](examples/apps.yaml) naar je AppDaemon `apps.yaml`.
+10. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
+11. Herstart AppDaemon.
+12. Vul in Gielz bij `Zendure 2400 AC IP-adres` het interne AppDaemon add-on adres in: `a0d7b954-appdaemon:8120/endpoint`.
+
+HACS downloadt de AppDaemon code naar de Home Assistant configuratiemap onder `appdaemon/apps/`.
+
+Als AppDaemon als Home Assistant add-on draait, gebruik dan vanuit Home Assistant Core de interne add-on hostnaam `a0d7b954-appdaemon`. Gebruik `localhost:8120` alleen wanneer de caller in dezelfde container als AppDaemon draait.
+
+Na een HACS update van `Zendure zenSDK Proxy`: herstart AppDaemon. HACS vervangt de Python bestanden, maar HACS herstart de AppDaemon add-on niet zelf.
+
+### AppDaemon configuratie
+
+De AppDaemon entry point is `apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
+
+De AppDaemon class is `ZendureProxy`.
+
+De AppDaemon module naam is `zendure_proxy`.
+
+Volledige configuratie:
+
+```yaml
+zendure_proxy:
+  module: zendure_proxy
+  class: ZendureProxy
+
+  ip_zendure_1: "192.168.1.101"
+  ip_zendure_2: "192.168.1.102"
+  ip_zendure_3: ""
+
+  server_host: "0.0.0.0"
+  server_port: 8120
+  zendure_request_timeout: 60
+  ha_get_response_timeout: 8
+  get_cache_max_age: 300
+  get_rate_limit_window: 1
+  get_recovery_window: 30
+  degraded_power_hold_seconds: 1800
+
+  single_mode_upperlimit_percent: 100
+  single_mode_lowerlimit_percent: 40
+  single_mode_change_device_diff: 5
+
+  single_mode_delayed_standby_timer: 300
+  single_mode_standby_charging_enable: true
+  single_mode_standby_discharging_enable: true
+
+  singlemode_transition_timer: 40
+
+  balancing_factor: 5
+
+  dualmode_damper_enable: false
+  dualmode_damper_timer: 120
+  dualmode_damper_amount: 200
+
+  always_dual_mode: false
+  equal_mode: false
+
+  solar_power_info: false
+  manual_mode_repeat: true
+
+  log_file_enabled: true
+  log_file_path: ""
+  log_file_max_bytes: 1000000
+  log_file_backup_count: 5
+
+  log_dashboard_enabled: true
+  log_dashboard_route: "zendure_proxy_logs"
+  log_dashboard_lines: 300
+
+  metrics_enabled: true
+  metrics_dashboard_enabled: true
+  metrics_dashboard_route: "zendure_proxy_metrics"
+  metrics_dashboard_refresh: 10
+  metrics_ha_sensors_enabled: true
+  metrics_ha_sensors_interval: 30
+
+  proxy_ha_sensors_enabled: true
+  proxy_ha_sensors_skip_existing: true
+  proxy_ha_sensors_mqtt_discovery_enabled: true
+  proxy_ha_sensors_mqtt_discovery_prefix: "homeassistant"
+  proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
+  proxy_ha_sensors_mqtt_retain: true
+```
+
+Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
+
+De proxy luistert daarna op de legacy HTTP URLs:
+
+```text
+http://<appdaemon-host>:8120/properties/report
+http://<appdaemon-host>:8120/properties/write
+http://<appdaemon-host>:8120/endpoint/properties/report
+http://<appdaemon-host>:8120/endpoint/properties/write
+```
+
+Gebruik in Gielz op Home Assistant OS of Home Assistant Supervised meestal:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Gebruik in Gielz alleen een gewone hostnaam of IP-adres wanneer de AppDaemon poort `8120` ook buiten de add-on container bereikbaar is:
+
+```text
+<appdaemon-host>:8120/endpoint
+```
+
+### Home Assistant automations
+
+Home Assistant Core kan AppDaemon add-ons bereiken via de interne add-on DNS naam. Voor de AppDaemon add-on uit de Home Assistant Community Add-ons repository is die hostnaam meestal:
+
+```text
+a0d7b954-appdaemon
+```
+
+Voor bestaande Gielz automations is meestal geen aparte `rest_command` nodig. Vul bij `Zendure 2400 AC IP-adres` deze waarde in:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Gebruik deze `rest_command` configuratie alleen wanneer een eigen Home Assistant automation rechtstreeks de AppDaemon API endpoints aanroept:
+
+```yaml
+rest_command:
+  zendure_proxy_report:
+    url: "http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report"
+    method: GET
+
+  zendure_proxy_write:
+    url: "http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write"
+    method: POST
+    content_type: "application/json"
+    payload: "{{ payload }}"
+```
+
+Een automation kan daarna `rest_command.zendure_proxy_write` aanroepen met JSON in `payload`.
+
+Voorbeeld:
+
+```yaml
+action: rest_command.zendure_proxy_write
+data:
+  payload: '{"properties":{"outputHomePower":1200}}'
+```
+
+De AppDaemon endpoints zijn:
+
+```text
+GET  http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
+```
+
+De oude URLs op `8120` blijven bestaan voor installaties waarin de caller de AppDaemon containerpoort direct kan bereiken.
+
+### Pushmelding bij degraded pool
+
+Het is aan te raden om in Home Assistant een automation te maken die een push
+message stuurt wanneer `sensor.proxy_zendure_pool_healthy` naar `Degraded` gaat.
+Die melding geeft je de kans om de fysieke Zendure, het IP-adres, Wi-Fi, of de
+stroomvoorziening te controleren voordat de proxy de Zendure als `Dead`
+behandelt.
+
+Voorbeeld:
+
+```yaml
+alias: Zendure pool degraded melding
+mode: single
+trigger:
+  - platform: state
+    entity_id: sensor.proxy_zendure_pool_healthy
+    to: "Degraded"
+    for: "00:01:00"
+action:
+  - service: notify.mobile_app_jouw_telefoon
+    data:
+      title: "Zendure proxy degraded"
+      message: >
+        Een of meer Zendures reageren niet goed. Controleer
+        sensor.zendure_1_health, sensor.zendure_2_health, en
+        sensor.zendure_3_health in Home Assistant.
+```
+
+### Logging
+
+`ZendureProxy` schrijft eigen logregels naar de standaard AppDaemon log en naar een roterende logfile.
+
+Standaard logfile:
+
+```text
+<appdaemon-config-dir>/logs/zendure_proxy.log
+```
+
+Laat `log_file_path` leeg om deze standaardlocatie te gebruiken. Vul `log_file_path` alleen wanneer je zelf een ander absoluut pad wilt gebruiken.
+
+De roterende logfile gebruikt deze instellingen:
+
+```yaml
+log_file_enabled: true
+log_file_path: ""
+log_file_max_bytes: 1000000
+log_file_backup_count: 5
+```
+
+`log_file_max_bytes` bepaalt de maximale grootte van `zendure_proxy.log`. `log_file_backup_count` bepaalt hoeveel oude bestanden bewaard blijven, zoals `zendure_proxy.log.1` en `zendure_proxy.log.2`.
+
+De AppDaemon UI logpagina gebruikt deze instellingen:
+
+```yaml
+log_dashboard_enabled: true
+log_dashboard_route: "zendure_proxy_logs"
+log_dashboard_lines: 300
+```
+
+Open de logpagina via de AppDaemon UI:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
+```
+
+Open dezelfde logpagina vanuit een browser op je laptop via het IP-adres of de hostname van Home Assistant:
+
+```text
+http://<home-assistant-host>:5050/app/zendure_proxy_logs
+```
+
+De logpagina toont de laatste `log_dashboard_lines` regels en heeft een downloadlink voor de huidige logfile plus de rotatiebestanden.
+
+De proxy schrijft waarschuwingen wanneer queue cleanup wordt uitgevoerd:
+
+```text
+Queue cleanup: coalesced 3 queued GET requests into 1 upstream GET
+Queue cleanup: deduplicated 2 queued POST requests
+```
+
+De eerste waarschuwing betekent dat meerdere wachtende GET requests hetzelfde gecombineerde Zendure antwoord krijgen. De tweede waarschuwing betekent dat meerdere wachtende POST requests met dezelfde property keys zijn teruggebracht tot de nieuwste POST request.
+
+### Metrics
+
+`ZendureProxy` houdt metrics in memory bij voor inkomende Home Assistant requests, queue cleanup en uitgaande Zendure requests.
+
+De metrics configuratie staat standaard aan:
+
+```yaml
+metrics_enabled: true
+metrics_dashboard_enabled: true
+metrics_dashboard_route: "zendure_proxy_metrics"
+metrics_dashboard_refresh: 10
+metrics_ha_sensors_enabled: true
+metrics_ha_sensors_interval: 30
+```
+
+De proxy response sensors staan ook standaard aan:
+
+```yaml
+proxy_ha_sensors_enabled: true
+proxy_ha_sensors_skip_existing: true
+proxy_ha_sensors_mqtt_discovery_enabled: true
+proxy_ha_sensors_mqtt_discovery_prefix: "homeassistant"
+proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
+proxy_ha_sensors_mqtt_retain: true
+```
+
+Open het metrics dashboard via de AppDaemon UI:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
+```
+
+Open hetzelfde metrics dashboard vanuit een browser op je laptop via het IP-adres of de hostname van Home Assistant:
+
+```text
+http://<home-assistant-host>:5050/app/zendure_proxy_metrics
+```
+
+Deze log- en metrics-pagina's zijn AppDaemon app routes. `register_route(...)` publiceert deze routes onder `/app/<route>`, maar AppDaemon zet app routes niet automatisch in de HADashboard lijst.
+
+Wil je `Zendure Proxy` wel in de AppDaemon HADashboard lijst zien, kopieer dan [`examples/zendure_proxy.dash`](examples/zendure_proxy.dash) naar je AppDaemon `dashboards` map en herstart AppDaemon of forceer een dashboard recompile. Volgens de AppDaemon documentatie zoekt HADashboard standaard naar `.dash` bestanden in de `dashboards` map onder de AppDaemon config directory.
+
+Het metrics dashboard toont:
+
+- uptime van de proxy;
+- inkomende GET/POST totalen;
+- inkomende GET/POST error rates over de laatste 5 minuten;
+- inkomende GET/POST gemiddelde latency, p95 latency en max latency;
+- inkomende queue depths;
+- aantal GET requests dat door coalescing is bespaard;
+- aantal POST requests dat door deduplicatie is overgeslagen;
+- per Zendure device de uitgaande GET/POST totalen;
+- per Zendure device de uitgaande GET/POST error rates over de laatste 5 minuten;
+- per Zendure device de uitgaande GET/POST gemiddelde latency, p95 latency en max latency;
+- per Zendure device de uitgaande queue depth.
+
+De proxy publiceert standaard ook Home Assistant metrics via AppDaemon `set_state()`. De metrics worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
+
+`ZendureProxy._publish_metrics_sensors()` publiceert de queue, latency en error metrics. `ZendureProxy._restore_metrics_counters_from_ha()` leest counter sensor states uit Home Assistant bij het starten van AppDaemon. Daardoor tellen `sensor.zendure_proxy_incoming_get_total`, `sensor.zendure_proxy_queue_get_coalesced_total`, en de andere `*_total` counters verder vanaf de laatste Home Assistant state na een AppDaemon restart.
+
+`MetricsRegistry.flat_ha_sensors()` zet `state_class: total_increasing` alleen op counter sensors. Gewone meetwaarden zoals p95 latency, queue depth en error rate krijgen geen `state_class: total_increasing`.
+
+Voorbeelden van sensors:
+
+```text
+sensor.zendure_proxy_uptime
+sensor.zendure_proxy_incoming_get_p95_ms
+sensor.zendure_proxy_incoming_post_p95_ms
+sensor.zendure_proxy_incoming_get_total
+sensor.zendure_proxy_incoming_post_total
+sensor.zendure_proxy_incoming_get_error_rate
+sensor.zendure_proxy_incoming_post_error_rate
+sensor.zendure_proxy_queue_get_depth
+sensor.zendure_proxy_queue_post_depth
+sensor.zendure_proxy_queue_cleanup_total
+sensor.zendure_proxy_queue_get_coalesced_total
+sensor.zendure_proxy_queue_post_deduplicated_total
+sensor.zendure_proxy_device_1_queue_depth
+sensor.zendure_proxy_device_1_get_p95_ms
+sensor.zendure_proxy_device_1_post_p95_ms
+sensor.zendure_proxy_device_1_error_rate
+```
+
+Voor een 2- of 3-device setup worden ook `device_2` en `device_3` sensors aangemaakt.
+
+De proxy kan de gewone proxy sensors automatisch in Home Assistant aanmaken. Dat zijn dezelfde soort sensors als de oude REST sensors uit `HA_REST_proxy_sensors_NL` en `HA_REST_proxy_sensors_EN`, maar dan zonder dat je dat sensorblok handmatig hoeft te plakken.
+
+De proxy probeert eerst MQTT discovery. Als MQTT discovery werkt, krijgen de sensors ook een `unique_id`. Daardoor kun je de sensors in Home Assistant via de UI beheren, bijvoorbeeld hernoemen of aan een gebied koppelen.
+
+Kort gezegd: `entity_id` is de naam die je in dashboards en automations ziet, zoals `sensor.zendure_2_serienummer`. `unique_id` is het vaste interne nummer waarmee Home Assistant weet dat dezelfde sensor na een herstart of update nog steeds dezelfde sensor is. Zonder `unique_id` kan Home Assistant de sensorwaarde wel tonen, maar kun je de sensor meestal niet netjes beheren via de UI.
+
+MQTT discovery werkt alleen wanneer je Home Assistant installatie MQTT heeft. Je hebt daarvoor een MQTT broker nodig, de Home Assistant MQTT integration, en de AppDaemon MQTT plugin. Niet iedere installatie heeft MQTT al ingesteld.
+
+Heeft jouw installatie geen MQTT, dan maakt de proxy de sensors alsnog aan via AppDaemon. Die sensors werken dan gewoon voor dashboards en automations, maar Home Assistant toont bij die sensors geen `unique_id`. Dat is een beperking van Home Assistant: een gebruiker kan zelf geen `unique_id` toevoegen aan een entity die zonder `unique_id` is aangemaakt.
+
+Wil je zeker `unique_id` zonder MQTT? Gebruik dan de oude REST sensor YAML. De automatische AppDaemon fallback is vooral bedoeld om sensorwaarden zonder handmatige installatie beschikbaar te maken.
+
+Voorbeelden van proxy response sensors:
+
+```text
+sensor.zendure_2_soc_limiet_status
+sensor.zendure_2_serienummer
+sensor.dual_mode_demper_status
+sensor.vermogensopdracht_zendure_2
+sensor.zendure_actief_device
+sensor.zendure_proxy_versie
+```
+
+`proxy_ha_sensors_skip_existing: true` betekent: als je de oude REST sensors al hebt, laat de proxy die bestaande sensors met rust. Daardoor blijven bestaande installaties werken na een update.
+
+Nieuwe installaties zonder oude REST sensor YAML krijgen de proxy sensors automatisch. Als MQTT werkt, krijgen de nieuwe sensors een `unique_id`. Als MQTT niet werkt, krijgen de nieuwe sensors geen `unique_id`, maar de sensorwaarden komen wel binnen.
+
+Wil je op een bestaande installatie overstappen van oude REST sensors naar automatische MQTT discovery sensors, verwijder dan eerst de oude REST sensor YAML voor dezelfde entity_id's uit Home Assistant. Verwijder daarna oude REST sensor entity registry entries wanneer Home Assistant de oude REST entities als unavailable laat staan. Gebruik niet tegelijk oude REST sensors en MQTT discovery sensors voor dezelfde entity_id's, want Home Assistant maakt dan dubbele namen zoals `sensor.zendure_2_serienummer_2`.
+
+De metrics code staat in `zendure_proxy_metrics.py`. De proxy response sensor code staat in `zendure_proxy_ha_sensors.py`.
+
+### Queue model
+
+De proxy heeft twee lagen voor requestverwerking.
+
+`RequestQueue` in `zendure_proxy_queue.py` verwerkt inkomende Home Assistant requests. `RequestQueue` bundelt gelijktijdige GET requests en dedupliceert wachtende POST requests met dezelfde property keys.
+
+Elke `DeviceClient` in `zendure_proxy_device_client.py` heeft een eigen uitgaande `asyncio.Queue`. Er is dus een aparte uitgaande queue per fysiek Zendure device. De worker van `DeviceClient` stuurt maximaal een request tegelijk naar hetzelfde Zendure IP-adres.
+
+### Testen vanuit HA Terminal
+
+Gebruik vanuit de Home Assistant Terminal add-on de interne AppDaemon add-on hostnaam. Gebruik hier niet `127.0.0.1`, want `127.0.0.1` verwijst vanuit de Terminal add-on naar de Terminal container en niet naar de AppDaemon container.
+
+Test de standaard report URL:
+
+```bash
+curl -i http://a0d7b954-appdaemon:8120/properties/report
+```
+
+Test de `/endpoint` report URL die Gielz meestal gebruikt:
+
+```bash
+curl -i http://a0d7b954-appdaemon:8120/endpoint/properties/report
+```
+
+Test de AppDaemon API report endpoint:
+
+```bash
+curl -i http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+```
+
+Test een POST request zonder echt vermogen te vragen:
+
+```bash
+curl -i \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"ping":"pong"}' \
+  http://a0d7b954-appdaemon:8120/properties/write
+```
+
+Test dezelfde POST request via `/endpoint`:
+
+```bash
+curl -i \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"ping":"pong"}' \
+  http://a0d7b954-appdaemon:8120/endpoint/properties/write
+```
+
+Een werkende GET geeft een HTTP response van de proxy terug. Een fout zoals `Failed to connect to 127.0.0.1 port 8120` betekent dat de test naar de verkeerde container wijst.
+
+### Overstappen van Node-RED naar AppDaemon
+
+Deze stappen zijn bedoeld voor gebruikers die de Node-RED proxy al hebben draaien en willen overstappen naar de AppDaemon/Python versie.
+
+1. Maak eerst een backup van Home Assistant.
+
+2. Noteer de IP-adressen van je Zendure devices uit het Node-RED blok `Vul hier de Zendure IP adressen in`.
+
+3. Installeer AppDaemon en installeer daarna `Zendure zenSDK Proxy` via HACS zoals beschreven onder [AppDaemon via HACS](#appdaemon-via-hacs).
+
+4. Open je AppDaemon `apps.yaml` en voeg de `zendure_proxy` configuratie toe uit [`examples/apps.yaml`](examples/apps.yaml).
+
+5. Vul in `apps.yaml` dezelfde Zendure IP-adressen in die nu in Node-RED staan:
+
+```yaml
+ip_zendure_1: "192.168.x.x"
+ip_zendure_2: "192.168.x.y"
+ip_zendure_3: ""
+```
+
+6. Laat `proxy_ha_sensors_skip_existing: true` staan wanneer je de oude REST sensors al hebt. De AppDaemon proxy laat bestaande REST sensors dan met rust.
+
+7. Herstart AppDaemon.
+
+8. Controleer in de AppDaemon log of de proxy gestart is. Je zoekt naar regels zoals:
+
+```text
+Zendure proxy ... started
+Device 1 SN:
+Device 2 SN:
+```
+
+9. Test de AppDaemon proxy vanuit de Home Assistant Terminal add-on:
+
+```bash
+curl -i http://a0d7b954-appdaemon:8120/endpoint/properties/report
+```
+
+Een werkende test geeft `HTTP/1.1 200 OK` en een JSON response terug.
+
+10. Pas in het Gielz dashboard het veld `Zendure 2400 AC IP-adres` aan van de Node-RED URL naar:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Gebruik niet `localhost:8120/endpoint` wanneer AppDaemon als Home Assistant add-on draait. `localhost` wijst vanuit Home Assistant Core niet naar de AppDaemon add-on.
+
+11. Controleer in de AppDaemon log of Home Assistant de nieuwe proxy gebruikt. Je zoekt naar regels zoals:
+
+```text
+GET /endpoint/properties/report HTTP/1.1" 200
+POST /endpoint/properties/write HTTP/1.1" 200
+```
+
+12. Test daarna een veilige stand in Gielz, bijvoorbeeld een lage laad- of ontlaadopdracht. Controleer of `sensor.vermogensopdracht_zendure_1`, `sensor.vermogensopdracht_zendure_2`, en eventueel `sensor.vermogensopdracht_zendure_3` blijven updaten.
+
+13. Laat Node-RED nog even geïnstalleerd staan, maar zorg dat Gielz niet meer naar Node-RED wijst. Als de AppDaemon proxy stabiel werkt, kun je de Node-RED flow uitschakelen of verwijderen.
+
+14. Verwijder de oude REST sensors alleen als je bewust wilt overstappen naar automatische proxy sensors. Laat de oude REST sensors staan wanneer je `unique_id` via YAML wilt behouden of wanneer je geen MQTT gebruikt.
+
+Kort samengevat: eerst AppDaemon werkend maken, daarna pas het Gielz IP-adres wijzigen, en Node-RED pas uitzetten nadat je `GET ... 200` en `POST ... 200` in de AppDaemon log ziet.
+
+### Release naar HACS
+
+Voor testen als custom repository is een GitHub release niet verplicht. HACS leest zonder release de default branch.
+
+Voor een nette gebruikerservaring maak je wel een GitHub release. HACS toont dan de laatste releases als updatekeuzes.
+
+Controleer vóór een release dat de GitHub Action `Validate HACS` groen is.
+
 
 De [Gielz-automatisering](https://github.com/Gielz1986/Zendure-HA-zenSDK) voor Zendure werkt goed om een Zendure thuisbatterij (die de ZenSDK API ondersteunt) lokaal te bedienen via Home Assistant. Hierdoor is de batterij niet meer afhankelijk van een verbinding met de cloud.
 
@@ -35,7 +624,14 @@ De Proxy is zowel in het [Nederlands](https://github.com/gast777/Zendure-zenSDK-
 
 - [ ] Vul de IP adressen van de Zendure devices in, in het blok "**Vul hier de Zendure IP adressen in**" (zie het rode vierkant in het plaatjes hieronder).<br/>
 
-Hiervoor importeer je eerst de flow Zendure-proxy-Node-Red-flow_XX.json in Node-RED via het menu (hamburger rechtsboven) -> Import. Vervolgens open je het blok "**Vul hier de Zendure IP adressen in**" door erop te dubbel clicken. Na invullen van de IP adressen click je op de rode "Done" knop. Daarna click je op de rode "Deploy" knop rechts boven in Node-RED om de flow te activeren. Daarmee is de Node-RED kant gereed.<br/>
+Hiervoor importeer je eerst de flow Zendure-proxy-Node-Red-flow_XX.json in Node-RED via het menu (hamburger rechtsboven) -> Import. 
+
+Als je deze popup krijgt, click dan op 'Install all'.<br/>
+
+  <img src="https://github.com/gast777/Zendure-zenSDK-proxy/blob/main/images/node-red-flowfuse-popup.png" width="50%">
+  <br/>
+
+Vervolgens open je het blok "**Vul hier de Zendure IP adressen in**" door erop te dubbel clicken. Na invullen van de IP adressen click je op de rode "Done" knop. Daarna click je op de rode "Deploy" knop rechts boven in Node-RED om de flow te activeren. Daarmee is de Node-RED kant gereed.<br/>
 <br/>
 
 ![Preview](images/node-red-flow-image2.png) 
@@ -633,7 +1229,7 @@ Daarnaast wisselen ze van actief device als het verschil in SoC >=5% wordt. En a
 
 ## Versie ##
 
-Huidige versie: 20260510
+Huidige versie: 20260520
 <br/>
 
 # Release-notes #
@@ -867,3 +1463,21 @@ Huidige versie: 20260510
 ## Nieuw in versie 20260510 ##
 - Debug mogelijkheden verbeterd in het Node-RED dashboard (`http://<ip-adres>:1880/endpoint/ui/` of `http://<ip-adres>:1880/ui/`). Het is nu mogelijk om via de web interface een debug te starten en deze optioneel naar een bestand te laten wegschrijven. Dit debug bestand kan vervolgens direct via de web interface gedownload worden en gedelete worden van het systeem. Dit werkt alleen als Node-RED als App (Add-on) bij Home Assistant is geinstalleerd.
 
+## Nieuw in versie 20260512 ##
+- Het debug dashboard gebruikt nu Flowfuse (Dashboard 2.0) nodes. Het dashboard is nu bereikbaar op `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxyinfo` of `http://<node-red_ip_adres>:1880/dashboard/zenproxyinfo`.<br/>
+  Bij de installatie is het eenmalig nodig om akkoord te geven om de Flowfuse Dashboard module te installeren op Node-RED. Daarvoor click je bij de volgende popup op 'Install all' of ga naar Manage Palette om het @flowfuse/node-red-dashboard te installeren.<br/>
+  
+  <img src="https://github.com/gast777/Zendure-zenSDK-proxy/blob/main/images/node-red-flowfuse-popup.png" width="50%">
+  <br/>
+  
+  De debug trace pagina's zijn bereikbaar via het hamburgermenu linksboven of rechtstreeks via `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxylivedataget` en `http://<node-red_ip_adres>:1880/endpoint/dashboard/zenproxylivedatapost` (eventueel zonder "/endpoint", afhankelijk van de installatie).
+
+## Nieuw in versie 20260520 ##
+- De AppDaemon/Python proxy publiceert nu per fysieke Zendure een modus sensor en een relais stand sensor: `sensor.zendure_1_modus`, `sensor.zendure_2_modus`, `sensor.zendure_3_modus`, `sensor.zendure_1_relais_stand`, `sensor.zendure_2_relais_stand`, en `sensor.zendure_3_relais_stand`. Gebruik `sensor.zendure_1_modus`, `sensor.zendure_2_modus`, of `sensor.zendure_3_modus` als `entity_id` in een `history_stats` sensor wanneer je relais schakelingen per Zendure wilt tellen. Daarmee zie je extra schakelingen tijdens balanceren die niet zichtbaar zijn wanneer je alleen `sensor.zendure_2400_ac_modus` als 1 gezamenlijke batterij telt. Een kopieerbaar Home Assistant YAML voorbeeld staat in `examples/per-device-relay-history-stats.yaml`.
+- De AppDaemon/Python proxy herstelt `latestPowerCmd`, `latestPowerCmd_1`, `latestPowerCmd_2`, `latestPowerCmd_3`, en `activeDevice` nu uit de actuele Zendure GET-data wanneer AppDaemon na een restart nog geen power-opdracht in `ProxyState` heeft. Daardoor tonen `sensor.vermogensopdracht*` en `sensor.zendure_actief_device` niet onterecht `0 W` en `Geen` terwijl de Zendures al laden of ontladen.
+- De AppDaemon/Python proxy leidt `acMode` nu af uit `inputLimit` of `outputLimit` wanneer Home Assistant/Gielz een power POST zonder `acMode` stuurt.
+- De AppDaemon/Python proxy lost AppDaemon `get_state(...)` resultaten nu eerst op voordat `zendure_proxy_ha_sensors.py` proxy sensors bouwt. Daardoor veroorzaakt `input_text.zendure_2400_ac_batterij_volgorde` geen `_asyncio.Task` fout meer in `/endpoint/properties/report`.
+- De AppDaemon/Python proxy levert nu dezelfde REST velden als de Node-RED GET response voor de proxy sensors, waaronder `socLimit_1`, `socLimit_2`, `socLimit_3`, `sn_1`, `sn_2`, `sn_3`, `dualModeDamper`, `equalMode`, `alwaysDualMode`, `outputPackPower_1`, `packInputPower_1`, en `batCalTime_1`.
+- De AppDaemon/Python proxy kan proxy sensors automatisch publiceren. Met MQTT discovery krijgen nieuwe sensors een `unique_id`; zonder MQTT maakt AppDaemon de sensorwaarden alsnog aan zonder `unique_id`.
+- De metrics counters lezen bij een AppDaemon restart hun laatste Home Assistant state terug en tellen daarna verder.
+- De README heeft een eenvoudige overstapprocedure gekregen voor gebruikers die van Node-RED naar AppDaemon willen gaan.

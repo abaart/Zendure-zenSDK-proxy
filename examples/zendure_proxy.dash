@@ -1,0 +1,21 @@
+title: Zendure Proxy
+widget_dimensions: [160, 120]
+widget_margins: [5, 5]
+columns: 8
+
+metrics:
+  widget_type: iframe
+  title: Metrics
+  refresh: 10
+  url_list:
+    - /app/zendure_proxy_metrics
+
+logs:
+  widget_type: iframe
+  title: Logs
+  refresh: 10
+  url_list:
+    - /app/zendure_proxy_logs
+
+layout:
+  - metrics(4x4), logs(4x4)
