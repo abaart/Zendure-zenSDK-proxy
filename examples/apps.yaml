@@ -8,10 +8,18 @@ zendure_proxy:
   ip_zendure_3: ""              # Leave empty for a 2-device setup.
 
   # HTTP server.
-  # The proxy listens on this port.
-  # Point the Gielz integration and HA REST sensors at:
+  # The proxy listens on this port inside the AppDaemon container.
+  # Home Assistant Core can normally reach this port via the internal add-on DNS:
+  #   http://a0d7b954-appdaemon:<server_port>/properties/report
+  #   http://a0d7b954-appdaemon:<server_port>/properties/write
+  #
+  # Use these URLs when the caller can reach the AppDaemon container port directly:
   #   http://<HA-host>:<server_port>/properties/report
   #   http://<HA-host>:<server_port>/properties/write
+  #
+  # Custom Home Assistant automations can also use AppDaemon's own HTTP API:
+  #   http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+  #   http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
   server_port: 8120
   server_host: "0.0.0.0"
 

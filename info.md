@@ -9,6 +9,11 @@ The proxy exposes the same Zendure zenSDK endpoints that the Gielz automation ex
 - `/endpoint/properties/report`
 - `/endpoint/properties/write`
 
+For Home Assistant automations, the proxy also registers AppDaemon API endpoints:
+
+- `GET /api/appdaemon/zendure_proxy_report`
+- `POST /api/appdaemon/zendure_proxy_write`
+
 The proxy talks to one, two, or three Zendure devices and returns one combined response to Home Assistant.
 
 ## Installation
@@ -26,10 +31,21 @@ HACS downloads the app code to the Home Assistant configuration directory under 
 
 The AppDaemon module must be `zendure_proxy`, because the `ZendureProxy` class is defined in `appdaemon/apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
 
-Point the Gielz `Zendure 2400 AC IP-adres` setting to the AppDaemon proxy address, for example:
+Point the Gielz `Zendure 2400 AC IP-adres` setting to the internal AppDaemon add-on address, for example:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Custom Home Assistant automations can also call the AppDaemon API endpoints directly:
+
+```text
+http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
+```
+
+The HTTP server is also available through a normal host name when the caller can reach the AppDaemon container port directly:
 
 ```text
 homeassistant.local:8120/endpoint
 ```
-
-Use `localhost:8120/endpoint` when AppDaemon and Home Assistant run in the same network namespace.

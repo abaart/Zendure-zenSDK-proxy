@@ -4,6 +4,7 @@ ZendureProxy – AppDaemon entry point.
 Responsibilities:
   * Load configuration and initialise shared state.
   * Start the aiohttp HTTP server.
+  * Register AppDaemon HTTP API endpoints for Home Assistant automations.
   * Accept incoming HA requests, enqueue them, return futures to callers.
   * Run the background queue-processor loop that drives GET/POST execution.
   * Wire together all the other modules; contain no business logic itself.
@@ -49,6 +50,12 @@ class ZendureProxy(hass.Hass):
         self._processor_task = asyncio.ensure_future(self._processor())
         asyncio.ensure_future(self._init_serial_numbers())
 
+        self._report_endpoint_handle = await self.register_endpoint(
+            self._api_report, "zendure_proxy_report"
+        )
+        self._write_endpoint_handle = await self.register_endpoint(
+            self._api_write, "zendure_proxy_write"
+        )
         await self._start_server()
 
         if not self._cfg.device_ips:
@@ -58,10 +65,15 @@ class ZendureProxy(hass.Hass):
             self.log(
                 f"Zendure proxy v{PROXY_VERSION} started | "
                 f"port={self._cfg.server_port} | "
+                f"api_endpoints=['zendure_proxy_report', 'zendure_proxy_write'] | "
                 f"devices={self._cfg.device_ips}"
             )
 
     async def terminate(self) -> None:
+        if getattr(self, "_report_endpoint_handle", None):
+            await self.deregister_endpoint(self._report_endpoint_handle)
+        if getattr(self, "_write_endpoint_handle", None):
+            await self.deregister_endpoint(self._write_endpoint_handle)
         if hasattr(self, "_runner"):
             await self._runner.cleanup()
         if hasattr(self, "_processor_task"):
@@ -87,53 +99,74 @@ class ZendureProxy(hass.Hass):
     # ── HTTP handlers ──────────────────────────────────────────────────────────
 
     async def _handle_get(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        self._state.counter_get_received += 1
-        self._state.latest_get_ts = now()
-
-        if not self._cfg.device_ips:
-            return aiohttp.web.Response(status=503, text="No devices configured")
-
-        if not all(d.sn for d in self._state.devices):
-            if self._state.last_get_response:
-                return aiohttp.web.json_response(self._state.last_get_response)
-            return aiohttp.web.Response(status=503, text="Initializing – try again shortly")
-
-        fut = await self._queue.enqueue_get()
-        try:
-            data = await asyncio.wait_for(fut, timeout=30.0)
-            self._state.counter_get_replies += 1
-            return aiohttp.web.json_response(data)
-        except asyncio.TimeoutError:
-            if self._state.last_get_response:
-                return aiohttp.web.json_response(self._state.last_get_response)
-            return aiohttp.web.Response(status=504, text="Upstream timeout")
-        except Exception as exc:
-            self.log(f"GET handler error: {exc}", level="ERROR")
-            if self._state.last_get_response:
-                return aiohttp.web.json_response(self._state.last_get_response)
-            return aiohttp.web.Response(status=502, text=str(exc))
+        data, status = await self._execute_report_request()
+        return aiohttp.web.json_response(data, status=status)
 
     async def _handle_post(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
-        self._state.counter_post_received += 1
-
-        if not self._cfg.device_ips:
-            return aiohttp.web.json_response({"ack": "pong"})
-
         try:
             payload = await request.json()
         except Exception:
             return aiohttp.web.Response(status=400, text="Invalid JSON")
 
+        data, status = await self._execute_write_request(payload)
+        return aiohttp.web.json_response(data, status=status)
+
+    # ── AppDaemon API endpoints ────────────────────────────────────────────────
+
+    async def _api_report(self, _args, _kwargs) -> tuple[dict, int]:
+        return await self._execute_report_request()
+
+    async def _api_write(self, json_obj, _kwargs) -> tuple[dict, int]:
+        if not isinstance(json_obj, dict):
+            return {"error": "Invalid JSON"}, 400
+
+        return await self._execute_write_request(json_obj)
+
+    # ── Request execution shared by aiohttp and AppDaemon API ──────────────────
+
+    async def _execute_report_request(self) -> tuple[dict, int]:
+        self._state.counter_get_received += 1
+        self._state.latest_get_ts = now()
+
+        if not self._cfg.device_ips:
+            return {"error": "No devices configured"}, 503
+
+        if not all(d.sn for d in self._state.devices):
+            if self._state.last_get_response:
+                return self._state.last_get_response, 200
+            return {"error": "Initializing - try again shortly"}, 503
+
+        fut = await self._queue.enqueue_get()
+        try:
+            data = await asyncio.wait_for(fut, timeout=30.0)
+            self._state.counter_get_replies += 1
+            return data, 200
+        except asyncio.TimeoutError:
+            if self._state.last_get_response:
+                return self._state.last_get_response, 200
+            return {"error": "Upstream timeout"}, 504
+        except Exception as exc:
+            self.log(f"GET handler error: {exc}", level="ERROR")
+            if self._state.last_get_response:
+                return self._state.last_get_response, 200
+            return {"error": str(exc)}, 502
+
+    async def _execute_write_request(self, payload: dict) -> tuple[dict, int]:
+        self._state.counter_post_received += 1
+
+        if not self._cfg.device_ips:
+            return {"ack": "pong"}, 200
+
         fut = await self._queue.enqueue_post(payload)
         try:
             data = await asyncio.wait_for(fut, timeout=30.0)
             self._state.counter_post_replies += 1
-            return aiohttp.web.json_response(data)
+            return data, 200
         except asyncio.TimeoutError:
-            return aiohttp.web.json_response({"ack": "pong"})
+            return {"ack": "pong"}, 200
         except Exception as exc:
             self.log(f"POST handler error: {exc}", level="ERROR")
-            return aiohttp.web.json_response({"ack": "pong"})
+            return {"ack": "pong"}, 200
 
     # ── Queue processor ────────────────────────────────────────────────────────
 

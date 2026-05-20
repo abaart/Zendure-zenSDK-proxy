@@ -19,11 +19,11 @@ HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt 
 9. Kopieer de `zendure_proxy` configuratie uit [`examples/apps.yaml`](examples/apps.yaml) naar je AppDaemon `apps.yaml`.
 10. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
 11. Herstart AppDaemon.
-12. Vul in Gielz bij `Zendure 2400 AC IP-adres` het AppDaemon proxy adres in, bijvoorbeeld `homeassistant.local:8120/endpoint`.
+12. Vul in Gielz bij `Zendure 2400 AC IP-adres` het interne AppDaemon add-on adres in: `a0d7b954-appdaemon:8120/endpoint`.
 
 HACS downloadt de AppDaemon code naar de Home Assistant configuratiemap onder `appdaemon/apps/`.
 
-Als AppDaemon en Home Assistant in dezelfde add-on of container network namespace draaien, gebruik dan `localhost:8120/endpoint`. Als AppDaemon in een aparte container draait, gebruik dan het IP-adres of de hostnaam waarop Home Assistant de AppDaemon poort kan bereiken.
+Als AppDaemon als Home Assistant add-on draait, gebruik dan vanuit Home Assistant Core de interne add-on hostnaam `a0d7b954-appdaemon`. Gebruik `localhost:8120` alleen wanneer de caller in dezelfde container als AppDaemon draait.
 
 ### AppDaemon configuratie
 
@@ -72,7 +72,7 @@ zendure_proxy:
 
 Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
 
-De proxy luistert daarna op:
+De proxy luistert daarna op de legacy HTTP URLs:
 
 ```text
 http://<appdaemon-host>:8120/properties/report
@@ -81,11 +81,65 @@ http://<appdaemon-host>:8120/endpoint/properties/report
 http://<appdaemon-host>:8120/endpoint/properties/write
 ```
 
-Gebruik in Gielz meestal:
+Gebruik in Gielz op Home Assistant OS of Home Assistant Supervised meestal:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Gebruik in Gielz alleen een gewone hostnaam of IP-adres wanneer de AppDaemon poort `8120` ook buiten de add-on container bereikbaar is:
 
 ```text
 <appdaemon-host>:8120/endpoint
 ```
+
+### Home Assistant automations
+
+Home Assistant Core kan AppDaemon add-ons bereiken via de interne add-on DNS naam. Voor de AppDaemon add-on uit de Home Assistant Community Add-ons repository is die hostnaam meestal:
+
+```text
+a0d7b954-appdaemon
+```
+
+Voor bestaande Gielz automations is meestal geen aparte `rest_command` nodig. Vul bij `Zendure 2400 AC IP-adres` deze waarde in:
+
+```text
+a0d7b954-appdaemon:8120/endpoint
+```
+
+Gebruik deze `rest_command` configuratie alleen wanneer een eigen Home Assistant automation rechtstreeks de AppDaemon API endpoints aanroept:
+
+```yaml
+rest_command:
+  zendure_proxy_report:
+    url: "http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report"
+    method: GET
+
+  zendure_proxy_write:
+    url: "http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write"
+    method: POST
+    content_type: "application/json"
+    payload: "{{ payload }}"
+```
+
+Een automation kan daarna `rest_command.zendure_proxy_write` aanroepen met JSON in `payload`.
+
+Voorbeeld:
+
+```yaml
+action: rest_command.zendure_proxy_write
+data:
+  payload: '{"properties":{"outputHomePower":1200}}'
+```
+
+De AppDaemon endpoints zijn:
+
+```text
+GET  http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
+```
+
+De oude URLs op `8120` blijven bestaan voor installaties waarin de caller de AppDaemon containerpoort direct kan bereiken.
 
 ### Release naar HACS
 
