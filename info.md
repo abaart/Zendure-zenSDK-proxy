@@ -18,7 +18,7 @@ The proxy talks to one, two, or three Zendure devices and returns one combined r
 3. Enable `AppDaemon apps discovery & tracking`.
 4. Add this repository to HACS as an AppDaemon repository.
 5. Install `Zendure zenSDK Proxy` from HACS.
-6. Copy the `zendure_proxy` block from `apps/apps.yaml` into your AppDaemon `apps.yaml`.
+6. Copy the `zendure_proxy` block from `examples/apps.yaml` into your AppDaemon `apps.yaml`.
 7. Change `ip_zendure_1`, `ip_zendure_2`, and `ip_zendure_3` in AppDaemon `apps.yaml`.
 8. Restart AppDaemon.
 

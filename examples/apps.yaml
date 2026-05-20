@@ -1,0 +1,55 @@
+zendure_proxy:
+  module: zendure_proxy.app
+  class: ZendureProxy
+
+  # Required: IP addresses of your Zendure devices.
+  ip_zendure_1: "192.168.x.x"
+  ip_zendure_2: "192.168.x.y"
+  ip_zendure_3: ""              # Leave empty for a 2-device setup.
+
+  # HTTP server.
+  # The proxy listens on this port.
+  # Point the Gielz integration and HA REST sensors at:
+  #   http://<HA-host>:<server_port>/properties/report
+  #   http://<HA-host>:<server_port>/properties/write
+  server_port: 8120
+  server_host: "0.0.0.0"
+
+  # Mode-switching thresholds.
+  # Above single_mode_upperlimit_percent * maxPower, switch to multi-device mode.
+  # Below single_mode_lowerlimit_percent * maxPower, switch back to single device.
+  single_mode_upperlimit_percent: 100
+  single_mode_lowerlimit_percent: 40
+
+  # Minimum SoC difference (%) before the active single-mode device is rotated.
+  single_mode_change_device_diff: 5
+
+  # Standby (deep sleep) for inactive devices.
+  # After this many seconds of inactivity the passive device receives smartMode=0.
+  single_mode_delayed_standby_timer: 300
+  single_mode_standby_charging_enable: true
+  single_mode_standby_discharging_enable: true
+
+  # Device-switch transition.
+  # Smooth ramp duration in seconds when the active single-mode device changes.
+  singlemode_transition_timer: 40
+
+  # SoC balancing.
+  # Exponent for nonlinear weighting: higher means more aggressive balancing.
+  balancing_factor: 5
+
+  # Dual-mode damper prevents switching around the single-mode threshold.
+  dualmode_damper_enable: false
+  dualmode_damper_timer: 120
+  dualmode_damper_amount: 200
+
+  # Special modes.
+  always_dual_mode: false
+  equal_mode: false
+
+  # Solar power fields.
+  solar_power_info: false
+
+  # Manual-mode power repeat.
+  # Re-applies the last power command on every GET cycle.
+  manual_mode_repeat: true

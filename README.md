@@ -4,7 +4,7 @@
 
 Deze branch bevat naast de Node-RED flow ook een AppDaemon versie van de proxy.
 
-HACS installeert de AppDaemon code uit `apps/zendure_proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `apps/apps.yaml` toe aan je AppDaemon `apps.yaml`.
+HACS installeert de AppDaemon code uit `apps/zendure_proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `examples/apps.yaml` toe aan je AppDaemon `apps.yaml`.
 
 ### Installatie
 
@@ -16,7 +16,7 @@ HACS installeert de AppDaemon code uit `apps/zendure_proxy/`. HACS maakt geen Ap
 6. Voeg deze GitHub repository toe als type `AppDaemon`.
 7. Installeer `Zendure zenSDK Proxy`.
 8. Open je AppDaemon `apps.yaml`.
-9. Kopieer de `zendure_proxy` configuratie uit [`apps/apps.yaml`](apps/apps.yaml) naar je AppDaemon `apps.yaml`.
+9. Kopieer de `zendure_proxy` configuratie uit [`examples/apps.yaml`](examples/apps.yaml) naar je AppDaemon `apps.yaml`.
 10. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
 11. Herstart AppDaemon.
 12. Vul in Gielz bij `Zendure 2400 AC IP-adres` het AppDaemon proxy adres in, bijvoorbeeld `homeassistant.local:8120/endpoint`.
@@ -70,7 +70,7 @@ zendure_proxy:
   manual_mode_repeat: true
 ```
 
-Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`apps/apps.yaml`](apps/apps.yaml).
+Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
 
 De proxy luistert daarna op:
 
