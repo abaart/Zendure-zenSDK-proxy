@@ -92,7 +92,31 @@ Before release, run:
 ```bash
 python3 -m compileall -q apps/Zendure-zenSDK-proxy
 PYTHONPATH=apps/Zendure-zenSDK-proxy python3 -c 'import zendure_proxy; print(zendure_proxy.ZendureProxy)'
+python3 -m unittest discover -s tests
 ```
+
+Before release, also update `tests/test_appdaemon_proxy_release_gate.py` when code touches any of these functions or nearby code:
+
+- `ZendureProxy.initialize(...)`
+- `ZendureProxy._execute_report_request(...)`
+- `ZendureProxy._publish_proxy_ha_sensors(...)`
+- `ZendureProxy._publish_proxy_mqtt_sensor(...)`
+- `ZendureProxy._publish_metrics_sensors(...)`
+- `ZendureProxy._get_entity_state(...)`
+- `ZendureProxy._restore_metrics_counters_from_ha(...)`
+- `build_proxy_ha_sensors(...)`
+- `zendure_proxy_ha_sensors._battery_order(...)`
+
+`tests/test_appdaemon_proxy_release_gate.py` must simulate AppDaemon API methods returning both direct values and awaitable values. At minimum, verify these concrete cases before publishing a GitHub release:
+
+- `ZendureProxy._resolve_appdaemon_result(asyncio.Task)` returns the awaited value.
+- `ZendureProxy._resolve_appdaemon_result("direct-value")` returns `"direct-value"`.
+- `build_proxy_ha_sensors({"properties": {}, "packData": []}, battery_order_raw=<non-string object>)` does not raise `AttributeError`.
+- `build_proxy_ha_sensors(...)` still creates `sensor.zendure_2_soc_limiet_status`, `sensor.zendure_2_serienummer`, and `sensor.dual_mode_demper_status` from a combined response with three Zendure devices.
+- `mqtt_sensor_config(...)` still sets `unique_id` and `default_entity_id` for proxy sensors.
+- `MetricsRegistry.restore_counters_from_sensors(...)` still restores counter values from Home Assistant sensor states.
+
+Do not publish a release when `python3 -m unittest discover -s tests` fails, or when the tests only call pure helper functions and skip the AppDaemon methods above. Version `v0.1.7` failed because `ZendureProxy._publish_proxy_ha_sensors(...)` passed an awaitable from `self.get_state("input_text.zendure_2400_ac_batterij_volgorde")` into `zendure_proxy_ha_sensors._battery_order(...)`, and `_battery_order(...)` called `.split(";")` on an `_asyncio.Task`.
 
 Create the HACS release zip with Python modules at the zip root:
 

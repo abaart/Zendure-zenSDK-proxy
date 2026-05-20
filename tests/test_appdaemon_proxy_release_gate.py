@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+import sys
+import types
+import unittest
+
+
+APP_DIR = Path(__file__).resolve().parents[1] / "apps" / "Zendure-zenSDK-proxy"
+sys.path.insert(0, str(APP_DIR))
+
+
+def _install_fake_appdaemon() -> None:
+    appdaemon = types.ModuleType("appdaemon")
+    plugins = types.ModuleType("appdaemon.plugins")
+    hass = types.ModuleType("appdaemon.plugins.hass")
+    hassapi = types.ModuleType("appdaemon.plugins.hass.hassapi")
+
+    class Hass:
+        pass
+
+    hassapi.Hass = Hass
+    sys.modules.setdefault("appdaemon", appdaemon)
+    sys.modules.setdefault("appdaemon.plugins", plugins)
+    sys.modules.setdefault("appdaemon.plugins.hass", hass)
+    sys.modules.setdefault("appdaemon.plugins.hass.hassapi", hassapi)
+
+
+_install_fake_appdaemon()
+
+from zendure_proxy import ZendureProxy  # noqa: E402
+from zendure_proxy_config import Config  # noqa: E402
+from zendure_proxy_get_handler import build_combined_response  # noqa: E402
+from zendure_proxy_ha_sensors import build_proxy_ha_sensors  # noqa: E402
+from zendure_proxy_metrics import MetricsRegistry  # noqa: E402
+from zendure_proxy_mqtt_discovery import mqtt_sensor_config  # noqa: E402
+from zendure_proxy_state import DeviceState, ProxyState  # noqa: E402
+
+
+class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_appdaemon_result_accepts_task_and_direct_value(self) -> None:
+        task = asyncio.create_task(asyncio.sleep(0, result="1;2;3"))
+
+        self.assertEqual(
+            await ZendureProxy._resolve_appdaemon_result(task),
+            "1;2;3",
+        )
+        self.assertEqual(
+            await ZendureProxy._resolve_appdaemon_result("direct-value"),
+            "direct-value",
+        )
+
+    async def test_publish_proxy_ha_sensors_accepts_async_get_state(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = types.SimpleNamespace(
+            proxy_ha_sensors_enabled=True,
+            proxy_ha_sensors_skip_existing=False,
+            proxy_ha_sensors_mqtt_discovery_enabled=False,
+        )
+        proxy._mqtt_api = None
+        proxy._mqtt_sensor_error_logged = False
+        proxy._proxy_ha_sensor_owned_entities = set()
+        written_states: dict[str, tuple[str, dict]] = {}
+
+        def get_state(entity_id: str, attribute=None):
+            if entity_id == "input_text.zendure_2400_ac_batterij_volgorde":
+                return asyncio.create_task(asyncio.sleep(0, result="1;2;3"))
+            return asyncio.create_task(asyncio.sleep(0, result=None))
+
+        def set_state(entity_id: str, state, attributes, replace, check_existence):
+            written_states[entity_id] = (state, attributes)
+            return asyncio.create_task(asyncio.sleep(0))
+
+        proxy.get_state = get_state
+        proxy.set_state = set_state
+        proxy._proxy_log = lambda *args, **kwargs: None
+
+        await proxy._publish_proxy_ha_sensors({"properties": {}, "packData": []})
+
+        self.assertIn("sensor.zendure_proxy_versie", written_states)
+        self.assertEqual(written_states["sensor.zendure_proxy_versie"][0], "unknown")
+        self.assertTrue(
+            written_states["sensor.zendure_proxy_versie"][1]["zendure_proxy_managed"]
+        )
+
+    async def test_publish_proxy_mqtt_sensor_accepts_async_mqtt_publish(self) -> None:
+        published: list[tuple[str, str, bool]] = []
+
+        class FakeMqtt:
+            def mqtt_publish(self, topic: str, payload: str, retain: bool):
+                published.append((topic, payload, retain))
+                return asyncio.create_task(asyncio.sleep(0))
+
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = types.SimpleNamespace(
+            proxy_ha_sensors_mqtt_discovery_prefix="homeassistant",
+            proxy_ha_sensors_mqtt_state_prefix="zendure_proxy",
+            proxy_ha_sensors_mqtt_retain=True,
+        )
+        proxy._mqtt_api = FakeMqtt()
+
+        await proxy._publish_proxy_mqtt_sensor(
+            "sensor.zendure_2_serienummer",
+            "SN2",
+            {"friendly_name": "Zendure 2 Serienummer"},
+            {"proxyVersion": "test-version"},
+            "123",
+        )
+
+        self.assertEqual(len(published), 3)
+        self.assertEqual(
+            published[0][0],
+            "homeassistant/sensor/zendure_proxy/zendure_2_serienummer/config",
+        )
+        self.assertEqual(
+            published[1][0],
+            "zendure_proxy/sensor/zendure_2_serienummer/state",
+        )
+        self.assertEqual(
+            published[2][0],
+            "zendure_proxy/sensor/zendure_2_serienummer/attributes",
+        )
+
+
+class ProxySensorCompatibilityTests(unittest.TestCase):
+    def test_proxy_sensor_builder_ignores_non_string_battery_order(self) -> None:
+        class TaskLike:
+            pass
+
+        sensors = build_proxy_ha_sensors(
+            {"properties": {}, "packData": []},
+            battery_order_raw=TaskLike(),
+        )
+
+        self.assertIn("sensor.zendure_proxy_versie", sensors)
+
+    def test_proxy_sensor_builder_keeps_node_red_rest_compatibility(self) -> None:
+        response = _combined_three_device_response()
+        sensors = build_proxy_ha_sensors(response)
+
+        self.assertEqual(response["properties"]["socLimit_2"], 2)
+        self.assertEqual(response["sn_2"], "SN2")
+        self.assertEqual(response["properties"]["dualModeDamper"], 1)
+        self.assertEqual(response["properties"]["activeDevice"], 7)
+        self.assertEqual(
+            sensors["sensor.zendure_2_soc_limiet_status"][0],
+            "Ontlaadlimiet bereikt",
+        )
+        self.assertEqual(sensors["sensor.zendure_2_serienummer"][0], "SN2")
+        self.assertEqual(sensors["sensor.dual_mode_demper_status"][0], "Aan")
+
+    def test_mqtt_discovery_keeps_unique_id_and_default_entity_id(self) -> None:
+        config = mqtt_sensor_config(
+            "sensor.zendure_2_serienummer",
+            {"friendly_name": "Zendure 2 Serienummer"},
+            "homeassistant",
+            "zendure_proxy",
+        )
+
+        self.assertEqual(config["unique_id"], "zendure_proxy_zendure_2_serienummer")
+        self.assertEqual(
+            config["default_entity_id"],
+            "sensor.zendure_2_serienummer",
+        )
+
+    def test_metrics_restore_keeps_incremental_counters_after_restart(self) -> None:
+        metrics = MetricsRegistry(1)
+
+        restored = metrics.restore_counters_from_sensors(
+            {
+                "sensor.zendure_proxy_incoming_get_total": "5",
+                "sensor.zendure_proxy_queue_get_coalesced_total": "7",
+                "sensor.zendure_proxy_device_1_get_total": "11",
+            }
+        )
+
+        self.assertEqual(restored, 3)
+        self.assertEqual(metrics.incoming["GET"].total, 5)
+        self.assertEqual(metrics.queue_get_coalesced_requests_total, 7)
+        self.assertEqual(metrics.devices[0].get.total, 11)
+
+
+def _combined_three_device_response() -> dict:
+    results = [_device(1, "SN1"), _device(2, "SN2"), _device(3, "SN3")]
+    state = ProxyState(
+        device_count=3,
+        devices=[
+            DeviceState(ip="ip1"),
+            DeviceState(ip="ip2"),
+            DeviceState(ip="ip3"),
+        ],
+    )
+    state.devices_active_idx = [0, 1, 2]
+    state.device_active_count = 3
+    state.latest_power_cmd = 300
+    for idx, dev in enumerate(state.devices):
+        props = results[idx]["properties"]
+        dev.electric_level = props["electricLevel"]
+        dev.soc_limit = props["socLimit"]
+        dev.soc_status = props["socStatus"]
+        dev.smart_mode = props["smartMode"]
+        dev.sn = results[idx]["sn"]
+        dev.charge_max_limit = props["chargeMaxLimit"]
+        dev.inverse_max_power = props["inverseMaxPower"]
+        dev.latest_power_cmd = 100
+
+    return build_combined_response(
+        results,
+        state,
+        Config(
+            device_ips=["ip1", "ip2", "ip3"],
+            solar_power_info=True,
+            damper_enable=True,
+            always_dual_mode=True,
+            equal_mode=True,
+        ),
+    )
+
+
+def _device(idx: int, sn: str) -> dict:
+    return {
+        "sn": sn,
+        "product": f"Product {idx}",
+        "packData": [{"socLevel": 50 + idx, "maxTemp": 2831 + idx}],
+        "properties": {
+            "acMode": 1,
+            "inputLimit": 100,
+            "outputLimit": 0,
+            "outputPackPower": 0,
+            "packInputPower": 10 + idx,
+            "gridInputPower": 20 + idx,
+            "outputHomePower": 0,
+            "solarInputPower": 0,
+            "gridOffPower": 0,
+            "minSoc": 100,
+            "socSet": 1000,
+            "socLimit": idx,
+            "electricLevel": 40 + idx,
+            "smartMode": 1,
+            "BatVolt": 5200,
+            "remainOutTime": 0,
+            "hyperTmp": 2831 + idx,
+            "chargeMaxLimit": 800,
+            "inverseMaxPower": 800,
+            "packNum": 1,
+            "rssi": -40,
+            "is_error": 0,
+            "socStatus": 0,
+            "gridReverse": 0,
+            "batCalTime": 12,
+            "pvStatus": 1,
+            "acStatus": 1,
+            "dcStatus": 1,
+            "gridOffMode": 2,
+            "solarPower1": 1,
+            "solarPower2": 2,
+            "solarPower3": 3,
+            "solarPower4": 4,
+        },
+    }
+
+
+if __name__ == "__main__":
+    unittest.main()
