@@ -13,6 +13,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import Optional
 
 import aiohttp
@@ -78,6 +79,8 @@ class ZendureProxy(hass.Hass):
             await self._runner.cleanup()
         if hasattr(self, "_processor_task"):
             self._processor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._processor_task
         for client in self._clients:
             await client.close()
         self.log("Zendure proxy stopped")
