@@ -218,7 +218,19 @@ def build_combined_response(
         else:
             props["electricLevel"] = math.floor((eA + eB) / 2)
     else:
-        props["electricLevel"] = math.floor(sum(soc) / n)
+        corrected_soc = [float(v) for v in soc]
+        limit_count = 0
+        for i, limit in enumerate(sc):
+            if limit == 2:
+                corrected_soc[i] = min_soc_pct
+                limit_count += 1
+        if (
+            limit_count == 2
+            and all(v <= min_soc_pct + 2 for v in corrected_soc)
+        ):
+            props["electricLevel"] = math.ceil(sum(corrected_soc) / n)
+        else:
+            props["electricLevel"] = math.floor(sum(corrected_soc) / n)
 
     # ── SoC limits ─────────────────────────────────────────────────────────────
     props["minSoc"] = max(_prop(i, "minSoc", 100) for i in range(n))
@@ -235,23 +247,41 @@ def build_combined_response(
         props["socLimit"] = 0  # mixed → treat as normal
 
     # ── Scalars ────────────────────────────────────────────────────────────────
-    props["smartMode"] = min(_prop(i, "smartMode", 0) for i in range(n))
-    props["hyperTmp"] = round(sum(_prop(i, "hyperTmp", 2731) for i in range(n)) / n)
-    props["BatVolt"] = _prop(0, "BatVolt", 0)
-    props["remainOutTime"] = _prop(0, "remainOutTime", 0)
+    smart_modes = [_int(_prop(i, "smartMode", 0)) for i in range(n)]
+    if (
+        any(getattr(dev, "standby_device", False) for dev in devs)
+        or state.transition_start_ts > 0
+        or state.dualmode_damper_active
+    ):
+        props["smartMode"] = max(smart_modes)
+    else:
+        props["smartMode"] = math.prod(smart_modes)
+
+    props["hyperTmp"] = max(_prop(i, "hyperTmp", 2731) for i in range(n))
+    props["BatVolt"] = math.floor(sum(_prop(i, "BatVolt", 0) for i in range(n)) / n)
+    props["remainOutTime"] = math.floor(
+        sum(_prop(i, "remainOutTime", 0) for i in range(n)) / n
+    )
     props["packNum"] = _sum("packNum")
     props["rssi"] = min(_prop(i, "rssi", 0) for i in range(n))
     props["is_error"] = max(_prop(i, "is_error", 0) for i in range(n))
-    props["socStatus"] = max(_prop(i, "socStatus", 0) for i in range(n))
-    props["batCalTime"] = max(_prop(i, "batCalTime", 0) for i in range(n))
+    props["socStatus"] = min(_prop(i, "socStatus", 0) for i in range(n))
 
-    for key in ("gridReverse", "pvStatus", "acStatus", "dcStatus"):
-        if key in results[0].get("properties", {}):
-            props[key] = results[0]["properties"][key]
+    if all("gridReverse" in results[i].get("properties", {}) for i in range(n)):
+        props["gridReverse"] = math.floor(
+            sum(_prop(i, "gridReverse", 0) for i in range(n)) / n
+        )
+    if all("pass" in results[i].get("properties", {}) for i in range(n)):
+        pass_values = [_prop(i, "pass", 0) for i in range(n)]
+        props["pass"] = pass_values[0] if len(set(pass_values)) == 1 else -1
+
+    for key in ("pvStatus", "acStatus", "dcStatus"):
+        if all(key in results[i].get("properties", {}) for i in range(n)):
+            props[key] = max(_prop(i, key, 0) for i in range(n))
 
     if all("batCalTime" in results[i].get("properties", {}) for i in range(n)):
         bat_cal_times = [_prop(i, "batCalTime", 0) for i in range(n)]
-        props["batCalTime"] = bat_cal_times[0] if len(set(bat_cal_times)) == 1 else 0
+        props["batCalTime"] = bat_cal_times[0] if len(set(bat_cal_times)) == 1 else -1
         for i in range(3):
             props[f"batCalTime_{i+1}"] = bat_cal_times[i] if i < n else 0
     else:
@@ -337,9 +367,11 @@ def build_combined_response(
         output_pack_power=props["outputPackPower"],
         pack_input_power=props["packInputPower"],
     )
-    props["equalMode"] = 1 if cfg.equal_mode else 0
-    props["alwaysDualMode"] = 1 if cfg.always_dual_mode else 0
-    props["dualModeDamper"] = 1 if cfg.damper_enable else 0
+    props["equalMode"] = 1 if (state.equal_mode or cfg.equal_mode) else 0
+    props["alwaysDualMode"] = 1 if (state.always_dual_mode or cfg.always_dual_mode) else 0
+    props["dualModeDamper"] = 1 if (
+        state.dualmode_damper_enabled or cfg.damper_enable
+    ) else 0
     props["proxyVersion"] = PROXY_VERSION
     props["latestPowerCmd"] = latest_power_cmd
     props["device_active_count"] = state.device_active_count

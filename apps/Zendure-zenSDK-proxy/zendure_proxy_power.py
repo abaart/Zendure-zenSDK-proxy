@@ -61,22 +61,32 @@ def distribute_power(
 
     for _ in range(n + 1):
         surplus = 0.0
-        headroom = []
         for i in range(n):
             if power[i] > max_power:
                 surplus += power[i] - max_power
                 power[i] = float(max_power)
-                headroom.append(0.0)
-            else:
-                headroom.append(float(max_power) - power[i])
+
         if surplus < 0.5:
             break
-        total_headroom = sum(headroom)
-        if total_headroom < 0.5:
-            break
-        for i in range(n):
-            if headroom[i] > 0:
-                power[i] += surplus * (headroom[i] / total_headroom)
+
+        while surplus >= 0.5:
+            open_indices = [
+                i for i in range(n)
+                if power[i] < max_power and weights[i] > 0
+            ]
+            total_open_weight = sum(weights[i] for i in open_indices)
+            if total_open_weight <= 0:
+                break
+
+            distributed = 0.0
+            for i in open_indices:
+                addition = surplus * (weights[i] / total_open_weight)
+                actual = min(addition, float(max_power) - power[i])
+                power[i] += actual
+                distributed += actual
+            if distributed < 0.5:
+                break
+            surplus -= distributed
 
     return [math.floor(p) for p in power]
 
@@ -208,8 +218,15 @@ def apply_damper(
             state.dualmode_damper_active = True
             state.dualmode_damper_start_ts = now_ts
         if now_ts - state.dualmode_damper_start_ts < damper_timer:
-            n = state.device_count
-            return [round(upper / n)] * n
+            active_idx = (
+                state.devices_active_idx
+                if state.devices_active_idx
+                else [state.single_mode_active_device]
+            )
+            result = [0] * state.device_count
+            if active_idx:
+                result[active_idx[0]] = round(upper)
+            return result
     else:
         state.dualmode_damper_active = False
 

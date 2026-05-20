@@ -81,6 +81,11 @@ def _bool(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def is_placeholder_device_ip(value: str) -> bool:
+    """Return True for the placeholder IP strings from the Node-RED flow."""
+    return str(value).strip() in {"192.168.x.x", "192.168.x.y"}
+
+
 def load_config(args: dict) -> Config:
     raw = [
         str(args.get("ip_zendure_1", "")).strip(),
@@ -88,7 +93,7 @@ def load_config(args: dict) -> Config:
         str(args.get("ip_zendure_3", "")).strip(),
     ]
     return Config(
-        device_ips=[ip for ip in raw if ip],
+        device_ips=[ip for ip in raw if ip and not is_placeholder_device_ip(ip)],
         server_port=int(args.get("server_port", 8120)),
         server_host=str(args.get("server_host", "0.0.0.0")),
         single_mode_upper_pct=int(args.get("single_mode_upperlimit_percent", 100)),

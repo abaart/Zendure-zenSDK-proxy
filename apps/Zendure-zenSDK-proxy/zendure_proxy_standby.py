@@ -40,6 +40,7 @@ async def manage_standby(
                     {"sn": dev.sn, "properties": {"smartMode": 1}}
                 )
                 dev.smart_mode = 1
+            dev.standby_device = False
         else:
             should_standby = state.device_active_count < state.device_count and (
                 (ac_mode == 1 and cfg.standby_charging)
@@ -67,9 +68,17 @@ async def _delayed_standby(
         dev = state.devices[idx]
         if idx not in state.devices_active_idx:
             await clients[idx].post(
-                {"sn": dev.sn, "properties": {"smartMode": 0}}
+                {
+                    "sn": dev.sn,
+                    "properties": {
+                        "smartMode": 0,
+                        "outputLimit": 0,
+                        "inputLimit": 0,
+                    },
+                }
             )
             dev.smart_mode = 0
+            dev.standby_device = True
             logger(f"Device {idx+1} put into standby (smartMode=0)")
     except asyncio.CancelledError:
         pass

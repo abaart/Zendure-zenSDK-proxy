@@ -17,6 +17,20 @@ from typing import Callable, Optional
 import aiohttp
 
 
+def build_device_url(ip: str, endpoint: str, local_proxy_url: str = "") -> str:
+    """Build Zendure device URL, including Node-RED testdevice loopback URLs."""
+    endpoint = endpoint.strip("/")
+    if str(ip).startswith("testdevice") and local_proxy_url:
+        proxy_url = str(local_proxy_url).strip()
+        if not proxy_url.startswith(("http://", "https://")):
+            proxy_url = f"http://{proxy_url}"
+        endpoint_suffix = f"/{endpoint}"
+        if proxy_url.endswith(endpoint_suffix):
+            proxy_url = proxy_url[: -len(endpoint_suffix)]
+        return f"{proxy_url.rstrip('/')}/{ip}/{endpoint}"
+    return f"http://{ip}/{endpoint}"
+
+
 @dataclass
 class DeviceRequest:
     method: str
@@ -32,6 +46,7 @@ class DeviceClient:
         self._log = logger
         self._metrics = metrics
         self._device_idx = device_idx
+        self._local_proxy_url = ""
         self._session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=15)
         )
@@ -45,6 +60,10 @@ class DeviceClient:
     async def post(self, payload: dict) -> dict:
         """Queue POST /properties/write and await the worker result."""
         return await self._enqueue("POST", payload)
+
+    def set_local_proxy_url(self, local_proxy_url: str) -> None:
+        """Store the last proxy URL for testdevice loopback requests."""
+        self._local_proxy_url = local_proxy_url
 
     async def _enqueue(self, method: str, payload: Optional[dict]):
         fut: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -88,7 +107,7 @@ class DeviceClient:
         success = False
         try:
             async with self._session.get(
-                f"http://{self.ip}/properties/report"
+                build_device_url(self.ip, "properties/report", self._local_proxy_url)
             ) as resp:
                 if resp.status == 200:
                     success = True
@@ -116,7 +135,8 @@ class DeviceClient:
         success = False
         try:
             async with self._session.post(
-                f"http://{self.ip}/properties/write", json=payload
+                build_device_url(self.ip, "properties/write", self._local_proxy_url),
+                json=payload,
             ) as resp:
                 if resp.status == 200:
                     success = True

@@ -25,6 +25,7 @@ class DeviceState:
     latest_power_cmd_zero_ts: float = 0.0
     last_response: Optional[dict] = None
     standby_task: Optional[asyncio.Task] = None
+    standby_device: bool = False
 
 
 @dataclass
@@ -60,6 +61,7 @@ class ProxyState:
     transition_original_device: int = 0
 
     # Dual-mode damper state
+    dualmode_damper_enabled: bool = False
     dualmode_damper_active: bool = False
     dualmode_damper_start_ts: float = 0.0
 

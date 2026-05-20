@@ -61,6 +61,7 @@ class ZendureProxy(hass.Hass):
             devices=[DeviceState(ip=ip) for ip in self._cfg.device_ips],
             equal_mode=self._cfg.equal_mode,
             always_dual_mode=self._cfg.always_dual_mode,
+            dualmode_damper_enabled=self._cfg.damper_enable,
         )
         self._queue = RequestQueue()
 
@@ -394,10 +395,12 @@ class ZendureProxy(hass.Hass):
     # ── HTTP handlers ──────────────────────────────────────────────────────────
 
     async def _handle_get(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        self._remember_local_proxy_url(request)
         data, status = await self._execute_report_request()
         return aiohttp.web.json_response(data, status=status)
 
     async def _handle_post(self, request: aiohttp.web.Request) -> aiohttp.web.Response:
+        self._remember_local_proxy_url(request)
         try:
             payload = await request.json()
         except Exception:
@@ -417,6 +420,17 @@ class ZendureProxy(hass.Hass):
 
         return await self._execute_write_request(json_obj)
 
+    def _remember_local_proxy_url(self, request: aiohttp.web.Request) -> None:
+        host = request.headers.get("Host") if hasattr(request, "headers") else None
+        path = getattr(request, "path", "")
+        if not host or not path:
+            return
+        local_proxy_url = f"{host}{path}"
+        for client in self._clients:
+            setter = getattr(client, "set_local_proxy_url", None)
+            if setter is not None:
+                setter(local_proxy_url)
+
     # ── Request execution shared by aiohttp and AppDaemon API ──────────────────
 
     async def _execute_report_request(self) -> tuple[dict, int]:
@@ -432,6 +446,8 @@ class ZendureProxy(hass.Hass):
                 status = 503
                 return {"error": "No devices configured"}, status
 
+            if not all(d.sn for d in self._state.devices):
+                await self._ensure_serial_numbers()
             if not all(d.sn for d in self._state.devices):
                 if self._state.last_get_response:
                     status = 200
@@ -587,9 +603,7 @@ class ZendureProxy(hass.Hass):
                     gets
                     and get_response is not None
                     and not posts
-                    and self._cfg.manual_mode_repeat
-                    and self._state.last_post_payload is not None
-                    and self._state.latest_power_message_ts > 0
+                    and should_repeat_last_power(self._state, self._cfg, current_ts=now())
                 ):
                     try:
                         await execute_post(
@@ -610,7 +624,13 @@ class ZendureProxy(hass.Hass):
 
     async def _init_serial_numbers(self) -> None:
         """Fetch and store each device's serial number at startup."""
+        await self._ensure_serial_numbers()
+
+    async def _ensure_serial_numbers(self) -> bool:
+        """Retry missing serial numbers and return True when all serials exist."""
         for i, client in enumerate(self._clients):
+            if i < len(self._state.devices) and self._state.devices[i].sn:
+                continue
             try:
                 data = await client.get()
                 if data and "sn" in data:
@@ -625,3 +645,62 @@ class ZendureProxy(hass.Hass):
                 self._proxy_log(
                     f"Device {i+1} SN init error: {exc}", level="WARNING"
                 )
+        return all(d.sn for d in self._state.devices)
+
+
+def should_repeat_last_power(
+    state: ProxyState,
+    cfg: Config,
+    *,
+    current_ts: float | None = None,
+) -> bool:
+    """Return True when Node-RED manual power-repeat conditions are satisfied."""
+    ts = now() if current_ts is None else current_ts
+    if not cfg.manual_mode_repeat:
+        return False
+    if state.device_count < 2:
+        return False
+    if state.last_post_payload is None:
+        return False
+    payload_power_cmd = _repeat_payload_power_cmd(
+        state.last_post_payload.get("properties") or {}, state.ac_mode
+    )
+    if payload_power_cmd == 0:
+        return False
+    if state.latest_power_message_ts <= 0 or ts - state.latest_power_message_ts < 30:
+        return False
+    if state.latest_get_ts <= 0 or ts - state.latest_get_ts > 10:
+        return False
+    if state.latest_power_cmd == 0:
+        return False
+    if state.latest_power_cmd > 0 and all(d.soc_limit == 1 for d in state.devices):
+        return False
+    if state.latest_power_cmd < 0 and all(d.soc_limit == 2 for d in state.devices):
+        return False
+    return True
+
+
+def _repeat_payload_power_cmd(props: dict, current_ac_mode: int) -> int:
+    input_limit = _int(props.get("inputLimit", 0))
+    output_limit = _int(props.get("outputLimit", 0))
+    if "acMode" in props:
+        ac_mode = _int(props["acMode"])
+    elif input_limit > 0 and output_limit <= 0:
+        ac_mode = 1
+    elif output_limit > 0 and input_limit <= 0:
+        ac_mode = 2
+    else:
+        ac_mode = current_ac_mode
+
+    if ac_mode == 1:
+        return max(0, input_limit)
+    if ac_mode == 2:
+        return -max(0, output_limit)
+    return 0
+
+
+def _int(value, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
