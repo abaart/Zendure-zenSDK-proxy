@@ -421,6 +421,30 @@ def test_repeat_power_post_keeps_original_power_timestamp() -> None:
     assert state.latest_power_repeat_ts > 0
 
 
+def test_passive_zero_power_timestamp_is_not_refreshed_by_repeated_post() -> None:
+    state = _state(2)
+    state.ac_mode = 1
+    state.devices_active_idx = [0]
+    state.device_active_count = 1
+    state.single_mode_active_device = 0
+    state.devices[1].latest_power_cmd = 0
+    state.devices[1].latest_power_cmd_zero_ts = 123.0
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.devices[1].latest_power_cmd == 0
+    assert state.devices[1].latest_power_cmd_zero_ts == 123.0
+
+
 def test_charging_one_device_below_min_soc_uses_low_device_only() -> None:
     state = _state(2)
     state.min_soc = 100

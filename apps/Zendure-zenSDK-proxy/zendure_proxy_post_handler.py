@@ -213,8 +213,7 @@ async def execute_post(
     for i, client in enumerate(clients):
         if i not in eligible_set:
             stuck_power = degraded_power.get(i, 0)
-            devs[i].latest_power_cmd = stuck_power
-            devs[i].latest_power_cmd_zero_ts = now_ts if stuck_power == 0 else 0.0
+            _record_device_power_command(devs[i], stuck_power, now_ts)
             continue
         pwr = per_device[i]
         wake_standby_device = (
@@ -243,9 +242,7 @@ async def execute_post(
             device_payload["sn"] = devs[i].sn
         if not _suppress_standby_post(devs[i], dp):
             tasks.append(client.post(device_payload))
-        devs[i].latest_power_cmd = _signed_power_cmd(ac_mode, pwr)
-        if pwr == 0:
-            devs[i].latest_power_cmd_zero_ts = now_ts
+        _record_device_power_command(devs[i], _signed_power_cmd(ac_mode, pwr), now_ts)
 
     removed_active = set(prev_active_idx) - set(state.devices_active_idx)
     added_active = set(state.devices_active_idx) - set(prev_active_idx)
@@ -283,6 +280,16 @@ def _power_ac_mode(props: dict, current_ac_mode: int) -> int:
     if "acMode" in props:
         return _int(props["acMode"])
     return current_ac_mode
+
+
+def _record_device_power_command(dev, signed_power: int, now_ts: float) -> None:
+    previous_power = dev.latest_power_cmd
+    dev.latest_power_cmd = signed_power
+    if signed_power == 0:
+        if previous_power != 0 or dev.latest_power_cmd_zero_ts <= 0:
+            dev.latest_power_cmd_zero_ts = now_ts
+    else:
+        dev.latest_power_cmd_zero_ts = 0.0
 
 
 def _first_runtime_mode_key(props: dict) -> str | None:
