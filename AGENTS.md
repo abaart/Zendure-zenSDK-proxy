@@ -198,6 +198,8 @@ The AppDaemon UI metrics dashboard is:
 http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
 ```
 
+`register_route(...)` app routes do not appear automatically in the HADashboard dashboard list. HADashboard lists `.dash` files from the AppDaemon dashboard directory. `examples/zendure_proxy.dash` is the example dashboard file that embeds `/app/zendure_proxy_metrics` and `/app/zendure_proxy_logs` with iframe widgets.
+
 The report endpoints call the same internal function:
 
 - `_handle_get()` handles `/properties/report` and `/endpoint/properties/report`.

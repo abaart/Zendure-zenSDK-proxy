@@ -239,6 +239,12 @@ Open de logpagina via de AppDaemon UI:
 http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
 ```
 
+Open dezelfde logpagina vanuit een browser op je laptop via het IP-adres of de hostname van Home Assistant:
+
+```text
+http://<home-assistant-host>:5050/app/zendure_proxy_logs
+```
+
 De logpagina toont de laatste `log_dashboard_lines` regels en heeft een downloadlink voor de huidige logfile plus de rotatiebestanden.
 
 De proxy schrijft waarschuwingen wanneer queue cleanup wordt uitgevoerd:
@@ -270,6 +276,16 @@ Open het metrics dashboard via de AppDaemon UI:
 ```text
 http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
 ```
+
+Open hetzelfde metrics dashboard vanuit een browser op je laptop via het IP-adres of de hostname van Home Assistant:
+
+```text
+http://<home-assistant-host>:5050/app/zendure_proxy_metrics
+```
+
+Deze log- en metrics-pagina's zijn AppDaemon app routes. `register_route(...)` publiceert deze routes onder `/app/<route>`, maar AppDaemon zet app routes niet automatisch in de HADashboard lijst.
+
+Wil je `Zendure Proxy` wel in de AppDaemon HADashboard lijst zien, kopieer dan [`examples/zendure_proxy.dash`](examples/zendure_proxy.dash) naar je AppDaemon `dashboards` map en herstart AppDaemon of forceer een dashboard recompile. Volgens de AppDaemon documentatie zoekt HADashboard standaard naar `.dash` bestanden in de `dashboards` map onder de AppDaemon config directory.
 
 Het metrics dashboard toont:
 
