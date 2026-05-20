@@ -59,6 +59,10 @@ def test_manual_repeat_uses_node_red_guard_conditions() -> None:
     assert should_repeat_last_power(state, cfg, current_ts=1000) is False
 
     state = _repeat_state()
+    state.last_post_payload = {"properties": {"inputLimit": 500, "outputLimit": 0}}
+    assert should_repeat_last_power(state, cfg, current_ts=1000) is False
+
+    state = _repeat_state()
     state.latest_power_cmd = -500
     state.last_post_payload = {"properties": {"acMode": 2, "outputLimit": 500}}
     for device in state.devices:

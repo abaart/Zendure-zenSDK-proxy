@@ -885,9 +885,10 @@ def should_repeat_last_power(
         return False
     if state.last_post_payload is None:
         return False
-    payload_power_cmd = _repeat_payload_power_cmd(
-        state.last_post_payload.get("properties") or {}, state.ac_mode
-    )
+    props = state.last_post_payload.get("properties") or {}
+    if _repeat_payload_has_explicit_zero_power(props):
+        return False
+    payload_power_cmd = _repeat_payload_power_cmd(props, state.ac_mode)
     if payload_power_cmd == 0:
         return False
     if state.latest_power_message_ts <= 0 or ts - state.latest_power_message_ts < 30:
@@ -901,6 +902,13 @@ def should_repeat_last_power(
     if state.latest_power_cmd < 0 and all(d.soc_limit == 2 for d in state.devices):
         return False
     return True
+
+
+def _repeat_payload_has_explicit_zero_power(props: dict) -> bool:
+    return any(
+        key in props and _int(props.get(key)) == 0
+        for key in ("inputLimit", "outputLimit")
+    )
 
 
 def _repeat_payload_power_cmd(props: dict, current_ac_mode: int) -> int:

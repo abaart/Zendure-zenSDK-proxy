@@ -13,7 +13,7 @@ from typing import Any, Callable, Optional
 
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_power import PROXY_VERSION, epoch
+from zendure_proxy_power import PROXY_VERSION, epoch, now
 from zendure_proxy_state import ProxyState
 
 
@@ -256,7 +256,7 @@ def build_combined_response(
     smart_modes = [_int(_prop(i, "smartMode", 0)) for i in range(n)]
     if (
         any(getattr(dev, "standby_device", False) for dev in devs)
-        or state.transition_start_ts > 0
+        or _transition_recent(state, cfg)
         or state.dualmode_damper_active
     ):
         props["smartMode"] = max(smart_modes)
@@ -408,6 +408,9 @@ def _active_device_mask(
     if latest_power_cmd == 0 or charging_limit_powerzero or discharging_limit_powerzero:
         return 0
 
+    if state.device_count == 2 and state.device_active_count == 2:
+        return 3
+
     active_idx = [idx for idx, cmd in enumerate(device_power_cmds[:3]) if cmd != 0]
     if not active_idx:
         active_idx = state.devices_active_idx
@@ -418,6 +421,19 @@ def _active_device_mask(
         if 0 <= idx < 3:
             mask |= 1 << idx
     return mask
+
+
+def _transition_recent(state: ProxyState, cfg: Config) -> bool:
+    current_ts = now()
+    window = getattr(cfg, "transition_timer", 40) + 10
+    return any(
+        start > 0 and current_ts - start < window
+        for start in (
+            state.transition_start_ts,
+            state.single_to_dual_transition_start_ts,
+            state.forced_dual_transition_start_ts,
+        )
+    )
 
 
 def _reported_power_cmd(props: dict) -> int:

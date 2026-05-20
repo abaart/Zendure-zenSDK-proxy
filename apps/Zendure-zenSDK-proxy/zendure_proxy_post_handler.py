@@ -197,15 +197,27 @@ async def execute_post(
     tasks = []
     for i, client in enumerate(clients):
         pwr = per_device[i]
+        wake_standby_device = (
+            not invalid_direction
+            and pwr != 0
+            and getattr(devs[i], "standby_device", False)
+        )
         dp = _power_payload_for_device(
             props,
             ac_mode,
             pwr,
             invalid_direction,
+            include_ac_mode=state.ac_mode_inconsistent or wake_standby_device,
         )
         for k, v in props.items():
             if k not in _POWER_KEYS:
                 dp[k] = v
+        if wake_standby_device:
+            dp["acMode"] = ac_mode
+            dp["smartMode"] = 1
+            devs[i].smart_mode = 1
+            devs[i].standby_device = False
+            devs[i].latest_power_cmd_zero_ts = 0.0
         device_payload: dict = {"properties": dp}
         if devs[i].sn:
             device_payload["sn"] = devs[i].sn
@@ -276,9 +288,11 @@ def _power_payload_for_device(
     ac_mode: int,
     pwr: int,
     invalid_direction: bool,
+    *,
+    include_ac_mode: bool = False,
 ) -> dict:
     dp: dict = {}
-    if "acMode" in props:
+    if "acMode" in props or include_ac_mode:
         dp["acMode"] = ac_mode
 
     if invalid_direction:
@@ -343,7 +357,9 @@ def _suppress_standby_post(dev, props: dict) -> bool:
         and _int(props.get("outputLimit", 0)) == 0
     )
     wake_only = (
-        set(props.keys()) == {"smartMode"}
+        "smartMode" in props
+        and "inputLimit" not in props
+        and "outputLimit" not in props
         and _int(props.get("smartMode", 0)) == 1
     )
     return power_zero or wake_only

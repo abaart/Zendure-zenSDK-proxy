@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from zendure_proxy_config import Config
 from zendure_proxy_get_handler import _update_device_state, build_combined_response
+from zendure_proxy_power import now
 from zendure_proxy_state import DeviceState, ProxyState
 
 from conftest import device_response
@@ -133,3 +134,41 @@ def test_smart_mode_uses_max_when_a_device_is_in_proxy_standby() -> None:
     )
 
     assert response["properties"]["smartMode"] == 1
+
+
+def test_smart_mode_uses_max_during_single_to_dual_transition_window() -> None:
+    results = [
+        device_response(1, "SN1", properties={"smartMode": 1}),
+        device_response(2, "SN2", properties={"smartMode": 0}),
+    ]
+    state = _state_for(results, active_idx=[0, 1])
+    state.device_active_count = 2
+    state.single_to_dual_transition_start_ts = now()
+
+    response = build_combined_response(
+        results,
+        state,
+        Config(device_ips=["ip1", "ip2"]),
+    )
+
+    assert response["properties"]["smartMode"] == 1
+
+
+def test_two_device_dual_mode_reports_both_active_even_with_one_zero_command() -> None:
+    results = [
+        device_response(1, "SN1"),
+        device_response(2, "SN2"),
+    ]
+    state = _state_for(results, active_idx=[0, 1])
+    state.device_active_count = 2
+    state.latest_power_cmd = 500
+    state.devices[0].latest_power_cmd = 500
+    state.devices[1].latest_power_cmd = 0
+
+    response = build_combined_response(
+        results,
+        state,
+        Config(device_ips=["ip1", "ip2"]),
+    )
+
+    assert response["properties"]["activeDevice"] == 3
