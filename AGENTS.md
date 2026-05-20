@@ -244,7 +244,8 @@ After a HACS update, tell users to restart AppDaemon. HACS updates files, but HA
 
 Logging:
 
-- `ZendureProxy._log(...)` writes to the standard AppDaemon log and to `ProxyFileLogger` when `log_file_enabled` is true.
+- `ZendureProxy._proxy_log(...)` writes to the standard AppDaemon log and to `ProxyFileLogger` when `log_file_enabled` is true.
+- Do not add a method named `ZendureProxy._log(...)`. AppDaemon `self.log(...)` calls the internal AppDaemon `_log(logger, msg, level, *args, **kwargs)` method.
 - The default rotating file is `<appdaemon-config-dir>/logs/zendure_proxy.log`.
 - `ProxyFileLogger` lives in `zendure_proxy_logging.py`.
 - The AppDaemon UI route is registered with `register_route(self._logs_dashboard, self._cfg.log_dashboard_route)`.
@@ -257,6 +258,7 @@ Metrics:
 - `MetricsRegistry.prometheus_lines()` returns Prometheus-style text lines for a future `/metrics` endpoint.
 - `metrics_ha_sensors_enabled` defaults to true.
 - `ZendureProxy._publish_metrics_sensors()` publishes metrics through AppDaemon `set_state(...)`.
+- `ZendureProxy._publish_metrics_sensors()` passes `replace=True` to `set_state(...)` and `MetricsRegistry.flat_ha_sensors()` does not set `state_class`, because Home Assistant can reject dynamic AppDaemon state writes with `400 Bad Request` when the payload contains long-term-statistics metadata or old read-only attributes.
 - `metrics_ha_sensors_interval` defaults to 30 seconds, so Home Assistant is not updated on every request.
 - `ZendureProxy._metrics_dashboard(...)` renders `/app/zendure_proxy_metrics`.
 

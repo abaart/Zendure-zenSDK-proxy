@@ -202,51 +202,51 @@ class MetricsRegistry:
 
         sensors["sensor.zendure_proxy_uptime"] = (
             snap["uptime_s"],
-            {"unit_of_measurement": "s", "state_class": "measurement"},
+            {"unit_of_measurement": "s"},
         )
         sensors["sensor.zendure_proxy_incoming_get_p95_ms"] = (
             round(snap["incoming"]["GET"]["latency"]["p95"], 1),
-            {"unit_of_measurement": "ms", "state_class": "measurement"},
+            {"unit_of_measurement": "ms"},
         )
         sensors["sensor.zendure_proxy_incoming_post_p95_ms"] = (
             round(snap["incoming"]["POST"]["latency"]["p95"], 1),
-            {"unit_of_measurement": "ms", "state_class": "measurement"},
+            {"unit_of_measurement": "ms"},
         )
         sensors["sensor.zendure_proxy_incoming_get_error_rate"] = (
             round(snap["incoming"]["GET"]["window"]["error_rate"], 2),
-            {"unit_of_measurement": "%", "state_class": "measurement"},
+            {"unit_of_measurement": "%"},
         )
         sensors["sensor.zendure_proxy_incoming_post_error_rate"] = (
             round(snap["incoming"]["POST"]["window"]["error_rate"], 2),
-            {"unit_of_measurement": "%", "state_class": "measurement"},
+            {"unit_of_measurement": "%"},
         )
         sensors["sensor.zendure_proxy_queue_get_depth"] = (
             snap["queue"]["incoming_get_depth"],
-            {"state_class": "measurement"},
+            {},
         )
         sensors["sensor.zendure_proxy_queue_post_depth"] = (
             snap["queue"]["incoming_post_depth"],
-            {"state_class": "measurement"},
+            {},
         )
         sensors["sensor.zendure_proxy_queue_cleanup_total"] = (
             snap["queue"]["get_coalesced_requests_total"]
             + snap["queue"]["post_deduplicated_requests_total"],
-            {"state_class": "total_increasing"},
+            {},
         )
 
         for device in snap["devices"]:
             idx = device["idx"]
             sensors[f"sensor.zendure_proxy_device_{idx}_queue_depth"] = (
                 device["queue_depth"],
-                {"state_class": "measurement"},
+                {},
             )
             sensors[f"sensor.zendure_proxy_device_{idx}_get_p95_ms"] = (
                 round(device["GET"]["latency"]["p95"], 1),
-                {"unit_of_measurement": "ms", "state_class": "measurement"},
+                {"unit_of_measurement": "ms"},
             )
             sensors[f"sensor.zendure_proxy_device_{idx}_post_p95_ms"] = (
                 round(device["POST"]["latency"]["p95"], 1),
-                {"unit_of_measurement": "ms", "state_class": "measurement"},
+                {"unit_of_measurement": "ms"},
             )
             sensors[f"sensor.zendure_proxy_device_{idx}_error_rate"] = (
                 round(
@@ -262,7 +262,7 @@ class MetricsRegistry:
                     * 100.0,
                     2,
                 ),
-                {"unit_of_measurement": "%", "state_class": "measurement"},
+                {"unit_of_measurement": "%"},
             )
 
         return sensors

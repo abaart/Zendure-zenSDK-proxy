@@ -44,7 +44,7 @@ class ZendureProxy(hass.Hass):
         self._metrics = MetricsRegistry(len(self._cfg.device_ips))
 
         self._clients: list[DeviceClient] = [
-            DeviceClient(ip, self._log, self._metrics, idx)
+            DeviceClient(ip, self._proxy_log, self._metrics, idx)
             for idx, ip in enumerate(self._cfg.device_ips)
         ]
         self._state = ProxyState(
@@ -81,10 +81,12 @@ class ZendureProxy(hass.Hass):
         await self._start_server()
 
         if not self._cfg.device_ips:
-            self._log("WARNING: no Zendure IPs configured - proxy will not function",
-                      level="WARNING")
+            self._proxy_log(
+                "WARNING: no Zendure IPs configured - proxy will not function",
+                level="WARNING",
+            )
         else:
-            self._log(
+            self._proxy_log(
                 f"Zendure proxy v{PROXY_VERSION} started | "
                 f"port={self._cfg.server_port} | "
                 f"api_endpoints=['zendure_proxy_report', 'zendure_proxy_write'] | "
@@ -112,7 +114,7 @@ class ZendureProxy(hass.Hass):
                 await self._processor_task
         for client in self._clients:
             await client.close()
-        self._log("Zendure proxy stopped")
+        self._proxy_log("Zendure proxy stopped")
         if self._file_logger is not None:
             self._file_logger.close()
 
@@ -135,7 +137,7 @@ class ZendureProxy(hass.Hass):
             self.log(f"Could not start Zendure proxy file logger: {exc}", level="WARNING")
             return None
 
-    def _log(self, message: str, level: str = "INFO", **kwargs) -> None:
+    def _proxy_log(self, message: str, level: str = "INFO", **kwargs) -> None:
         self.log(message, level=level, **kwargs)
         if self._file_logger is not None:
             self._file_logger.log(message, level)
@@ -190,6 +192,7 @@ class ZendureProxy(hass.Hass):
                 entity_id,
                 state=state,
                 attributes=sensor_attributes,
+                replace=True,
                 check_existence=False,
             )
 
@@ -270,7 +273,7 @@ class ZendureProxy(hass.Hass):
                 status = 504
                 return {"error": "Upstream timeout"}, status
             except Exception as exc:
-                self._log(f"GET handler error: {exc}", level="ERROR")
+                self._proxy_log(f"GET handler error: {exc}", level="ERROR")
                 if self._state.last_get_response:
                     status = 200
                     return self._state.last_get_response, status
@@ -305,7 +308,7 @@ class ZendureProxy(hass.Hass):
                 status = 200
                 return {"ack": "pong"}, status
             except Exception as exc:
-                self._log(f"POST handler error: {exc}", level="ERROR")
+                self._proxy_log(f"POST handler error: {exc}", level="ERROR")
                 status = 200
                 return {"ack": "pong"}, status
         finally:
@@ -345,13 +348,13 @@ class ZendureProxy(hass.Hass):
                     deduplicated_groups=deduplicated_groups,
                 )
                 if len(gets) > 1:
-                    self._log(
+                    self._proxy_log(
                         "Queue cleanup: coalesced "
                         f"{len(gets)} queued GET requests into 1 upstream GET",
                         level="WARNING",
                     )
                 if skipped_post_count:
-                    self._log(
+                    self._proxy_log(
                         "Queue cleanup: deduplicated "
                         f"{skipped_post_count} queued POST requests",
                         level="WARNING",
@@ -362,13 +365,13 @@ class ZendureProxy(hass.Hass):
                 if gets:
                     try:
                         get_response = await execute_get(
-                            self._clients, self._state, self._cfg, self._log
+                            self._clients, self._state, self._cfg, self._proxy_log
                         )
                         for fut in gets:
                             if not fut.done():
                                 fut.set_result(get_response)
                     except Exception as exc:
-                        self._log(f"GET execution failed: {exc}", level="ERROR")
+                        self._proxy_log(f"GET execution failed: {exc}", level="ERROR")
                         cached = self._state.last_get_response
                         for fut in gets:
                             if not fut.done():
@@ -384,12 +387,12 @@ class ZendureProxy(hass.Hass):
                     try:
                         resp = await execute_post(
                             latest_payload, self._clients, self._state,
-                            self._cfg, self._log,
+                            self._cfg, self._proxy_log,
                         )
                         if not latest_fut.done():
                             latest_fut.set_result(resp)
                     except Exception as exc:
-                        self._log(f"POST execution failed: {exc}", level="ERROR")
+                        self._proxy_log(f"POST execution failed: {exc}", level="ERROR")
                         if not latest_fut.done():
                             latest_fut.set_result({"ack": "pong"})
 
@@ -406,16 +409,16 @@ class ZendureProxy(hass.Hass):
                     try:
                         await execute_post(
                             self._state.last_post_payload,
-                            self._clients, self._state, self._cfg, self._log,
+                            self._clients, self._state, self._cfg, self._proxy_log,
                             is_repeat=True,
                         )
                     except Exception as exc:
-                        self._log(f"Manual-repeat failed: {exc}", level="WARNING")
+                        self._proxy_log(f"Manual-repeat failed: {exc}", level="WARNING")
 
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                self._log(f"Queue processor error: {exc}", level="ERROR")
+                self._proxy_log(f"Queue processor error: {exc}", level="ERROR")
                 await asyncio.sleep(1)
 
     # ── Startup helper ─────────────────────────────────────────────────────────
@@ -427,11 +430,13 @@ class ZendureProxy(hass.Hass):
                 data = await client.get()
                 if data and "sn" in data:
                     self._state.devices[i].sn = data["sn"]
-                    self._log(f"Device {i+1} SN: {data['sn']}")
+                    self._proxy_log(f"Device {i+1} SN: {data['sn']}")
                 else:
-                    self._log(
+                    self._proxy_log(
                         f"Device {i+1}: could not fetch serial number",
                         level="WARNING",
                     )
             except Exception as exc:
-                self._log(f"Device {i+1} SN init error: {exc}", level="WARNING")
+                self._proxy_log(
+                    f"Device {i+1} SN init error: {exc}", level="WARNING"
+                )
