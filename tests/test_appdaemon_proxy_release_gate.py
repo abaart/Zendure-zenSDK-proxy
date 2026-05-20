@@ -27,7 +27,57 @@ def _install_fake_appdaemon() -> None:
     sys.modules.setdefault("appdaemon.plugins.hass.hassapi", hassapi)
 
 
+def _install_fake_aiohttp() -> None:
+    aiohttp = types.ModuleType("aiohttp")
+    web = types.ModuleType("aiohttp.web")
+
+    class Request:
+        pass
+
+    class Response:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class Application:
+        def __init__(self):
+            self.router = types.SimpleNamespace(add_get=lambda *args, **kwargs: None,
+                                                add_post=lambda *args, **kwargs: None)
+
+    class AppRunner:
+        def __init__(self, app):
+            self.app = app
+
+        async def setup(self):
+            return None
+
+        async def cleanup(self):
+            return None
+
+    class TCPSite:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+        async def start(self):
+            return None
+
+    def json_response(data, status=200):
+        return Response(data=data, status=status)
+
+    web.Request = Request
+    web.Response = Response
+    web.Application = Application
+    web.AppRunner = AppRunner
+    web.TCPSite = TCPSite
+    web.json_response = json_response
+    aiohttp.web = web
+    sys.modules.setdefault("aiohttp", aiohttp)
+    sys.modules.setdefault("aiohttp.web", web)
+
+
 _install_fake_appdaemon()
+_install_fake_aiohttp()
 
 from zendure_proxy import ZendureProxy  # noqa: E402
 from zendure_proxy_config import Config  # noqa: E402
