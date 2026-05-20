@@ -66,6 +66,11 @@ class RequestQueue:
 
         return gets, _dedup_posts(posts_raw)
 
+    async def depths(self) -> tuple[int, int]:
+        """Return current incoming GET and POST queue depths."""
+        async with self._lock:
+            return len(self._pending_gets), len(self._pending_posts)
+
 
 def _dedup_posts(posts: list[tuple[dict, asyncio.Future]]) -> list[PostGroup]:
     """

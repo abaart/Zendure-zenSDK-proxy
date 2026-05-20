@@ -22,6 +22,14 @@ The proxy also writes its own rotating logfile and exposes a small AppDaemon UI 
 http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
 ```
 
+The proxy exposes live request, latency, error-rate, queue, and per-device metrics:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
+```
+
+Metrics are also published as Home Assistant sensors by default.
+
 ## Installation
 
 1. Install and start AppDaemon.

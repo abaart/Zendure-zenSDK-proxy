@@ -192,6 +192,12 @@ The AppDaemon UI log dashboard is:
 http://a0d7b954-appdaemon:5050/app/zendure_proxy_logs
 ```
 
+The AppDaemon UI metrics dashboard is:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
+```
+
 The report endpoints call the same internal function:
 
 - `_handle_get()` handles `/properties/report` and `/endpoint/properties/report`.
@@ -243,6 +249,16 @@ Logging:
 - `ProxyFileLogger` lives in `zendure_proxy_logging.py`.
 - The AppDaemon UI route is registered with `register_route(self._logs_dashboard, self._cfg.log_dashboard_route)`.
 - The default route is `/app/zendure_proxy_logs`.
+
+Metrics:
+
+- `MetricsRegistry` lives in `zendure_proxy_metrics.py`.
+- `MetricsRegistry` tracks incoming GET/POST counts, latency samples, active request counts, errors, timeouts, queue cleanup counters, and per-device outgoing GET/POST metrics.
+- `MetricsRegistry.prometheus_lines()` returns Prometheus-style text lines for a future `/metrics` endpoint.
+- `metrics_ha_sensors_enabled` defaults to true.
+- `ZendureProxy._publish_metrics_sensors()` publishes metrics through AppDaemon `set_state(...)`.
+- `metrics_ha_sensors_interval` defaults to 30 seconds, so Home Assistant is not updated on every request.
+- `ZendureProxy._metrics_dashboard(...)` renders `/app/zendure_proxy_metrics`.
 
 Queue behavior:
 

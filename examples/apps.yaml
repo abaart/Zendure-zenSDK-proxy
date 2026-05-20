@@ -76,3 +76,13 @@ zendure_proxy:
   log_dashboard_enabled: true
   log_dashboard_route: "zendure_proxy_logs"
   log_dashboard_lines: 300
+
+  # Metrics dashboard and HA sensors.
+  # Open this URL in the AppDaemon UI:
+  #   http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
+  metrics_enabled: true
+  metrics_dashboard_enabled: true
+  metrics_dashboard_route: "zendure_proxy_metrics"
+  metrics_dashboard_refresh: 10
+  metrics_ha_sensors_enabled: true
+  metrics_ha_sensors_interval: 30

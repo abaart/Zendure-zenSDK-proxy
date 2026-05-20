@@ -56,6 +56,14 @@ class Config:
     log_dashboard_route: str = "zendure_proxy_logs"
     log_dashboard_lines: int = 300
 
+    # Metrics dashboard and Home Assistant sensors
+    metrics_enabled: bool = True
+    metrics_dashboard_enabled: bool = True
+    metrics_dashboard_route: str = "zendure_proxy_metrics"
+    metrics_dashboard_refresh: int = 10
+    metrics_ha_sensors_enabled: bool = True
+    metrics_ha_sensors_interval: int = 30
+
 
 def _bool(value) -> bool:
     if isinstance(value, bool):
@@ -97,4 +105,10 @@ def load_config(args: dict) -> Config:
         log_dashboard_enabled=_bool(args.get("log_dashboard_enabled", True)),
         log_dashboard_route=str(args.get("log_dashboard_route", "zendure_proxy_logs")).strip(),
         log_dashboard_lines=int(args.get("log_dashboard_lines", 300)),
+        metrics_enabled=_bool(args.get("metrics_enabled", True)),
+        metrics_dashboard_enabled=_bool(args.get("metrics_dashboard_enabled", True)),
+        metrics_dashboard_route=str(args.get("metrics_dashboard_route", "zendure_proxy_metrics")).strip(),
+        metrics_dashboard_refresh=int(args.get("metrics_dashboard_refresh", 10)),
+        metrics_ha_sensors_enabled=_bool(args.get("metrics_ha_sensors_enabled", True)),
+        metrics_ha_sensors_interval=int(args.get("metrics_ha_sensors_interval", 30)),
     )

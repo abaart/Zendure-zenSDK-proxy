@@ -79,6 +79,13 @@ zendure_proxy:
   log_dashboard_enabled: true
   log_dashboard_route: "zendure_proxy_logs"
   log_dashboard_lines: 300
+
+  metrics_enabled: true
+  metrics_dashboard_enabled: true
+  metrics_dashboard_route: "zendure_proxy_metrics"
+  metrics_dashboard_refresh: 10
+  metrics_ha_sensors_enabled: true
+  metrics_ha_sensors_interval: 30
 ```
 
 Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
@@ -199,6 +206,64 @@ Queue cleanup: deduplicated 2 queued POST requests
 ```
 
 De eerste waarschuwing betekent dat meerdere wachtende GET requests hetzelfde gecombineerde Zendure antwoord krijgen. De tweede waarschuwing betekent dat meerdere wachtende POST requests met dezelfde property keys zijn teruggebracht tot de nieuwste POST request.
+
+### Metrics
+
+`ZendureProxy` houdt metrics in memory bij voor inkomende Home Assistant requests, queue cleanup en uitgaande Zendure requests.
+
+De metrics configuratie staat standaard aan:
+
+```yaml
+metrics_enabled: true
+metrics_dashboard_enabled: true
+metrics_dashboard_route: "zendure_proxy_metrics"
+metrics_dashboard_refresh: 10
+metrics_ha_sensors_enabled: true
+metrics_ha_sensors_interval: 30
+```
+
+Open het metrics dashboard via de AppDaemon UI:
+
+```text
+http://a0d7b954-appdaemon:5050/app/zendure_proxy_metrics
+```
+
+Het metrics dashboard toont:
+
+- uptime van de proxy;
+- inkomende GET/POST totalen;
+- inkomende GET/POST error rates over de laatste 5 minuten;
+- inkomende GET/POST gemiddelde latency, p95 latency en max latency;
+- inkomende queue depths;
+- aantal GET requests dat door coalescing is bespaard;
+- aantal POST requests dat door deduplicatie is overgeslagen;
+- per Zendure device de uitgaande GET/POST totalen;
+- per Zendure device de uitgaande GET/POST error rates over de laatste 5 minuten;
+- per Zendure device de uitgaande GET/POST gemiddelde latency, p95 latency en max latency;
+- per Zendure device de uitgaande queue depth.
+
+De proxy publiceert standaard ook Home Assistant sensors via AppDaemon `set_state()`. De sensors worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
+
+Voorbeelden van sensors:
+
+```text
+sensor.zendure_proxy_uptime
+sensor.zendure_proxy_incoming_get_p95_ms
+sensor.zendure_proxy_incoming_post_p95_ms
+sensor.zendure_proxy_incoming_get_error_rate
+sensor.zendure_proxy_incoming_post_error_rate
+sensor.zendure_proxy_queue_get_depth
+sensor.zendure_proxy_queue_post_depth
+sensor.zendure_proxy_queue_cleanup_total
+sensor.zendure_proxy_device_1_queue_depth
+sensor.zendure_proxy_device_1_get_p95_ms
+sensor.zendure_proxy_device_1_post_p95_ms
+sensor.zendure_proxy_device_1_error_rate
+```
+
+Voor een 2- of 3-device setup worden ook `device_2` en `device_3` sensors aangemaakt.
+
+De metrics code staat in `zendure_proxy_metrics.py`. De metric namen zijn bewust Prometheus-vriendelijk gehouden, zodat later een `/metrics` endpoint toegevoegd kan worden zonder de counters opnieuw te ontwerpen.
 
 ### Queue model
 
