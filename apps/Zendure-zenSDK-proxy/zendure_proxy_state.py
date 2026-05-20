@@ -86,6 +86,7 @@ class ProxyState:
     counter_missing: list[int] = field(default_factory=lambda: [0, 0, 0])
     latest_get_ts: float = 0.0
     latest_power_message_ts: float = 0.0
+    latest_power_repeat_ts: float = 0.0
     last_post_payload: Optional[dict] = None   # for manual-mode repeat
     standby_last_sent_by_sn: dict[str, float] = field(default_factory=dict)
 

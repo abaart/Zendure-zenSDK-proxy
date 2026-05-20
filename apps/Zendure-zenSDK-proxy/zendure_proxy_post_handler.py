@@ -64,6 +64,7 @@ async def execute_post(
 
         outbound_props = dict(device_props)
         _apply_aggregate_limit_props(outbound_props, state, devs, n)
+        smart_mode_before = [dev.smart_mode for dev in devs]
 
         responses = []
         for i, client in enumerate(clients):
@@ -75,6 +76,8 @@ async def execute_post(
                 else {"properties": dict(outbound_props)}
             )
             responses.append(await client.post(dp))
+            if "smartMode" in outbound_props:
+                devs[i].smart_mode = _int(outbound_props["smartMode"])
 
         if _int(outbound_props.get("smartMode", -1), -1) == 1:
             passive = set(range(n)) - set(state.devices_active_idx)
@@ -82,21 +85,28 @@ async def execute_post(
             for idx in passive:
                 if (
                     0 <= idx < len(devs)
-                    and devs[idx].smart_mode == 0
+                    and smart_mode_before[idx] == 0
                     and not devs[idx].standby_device
                 ):
                     devs[idx].latest_power_cmd_zero_ts = stamp
+            await manage_standby(
+                state, clients, state.ac_mode, [0] * n, cfg, logger
+            )
 
         return responses if responses else {"ack": "pong"}
 
     # ── Power command ─────────────────────────────────────────────────────────
     now_ts = now()
-    state.latest_power_message_ts = now_ts
+    if is_repeat:
+        state.latest_power_repeat_ts = now_ts
+    else:
+        state.latest_power_message_ts = now_ts
+        state.latest_power_repeat_ts = 0.0
 
     props = device_props
     input_limit: int = _int(props.get("inputLimit", 0))
     output_limit: int = _int(props.get("outputLimit", 0))
-    ac_mode: int = _power_ac_mode(props, state.ac_mode, input_limit, output_limit)
+    ac_mode: int = _power_ac_mode(props, state.ac_mode)
     invalid_direction = (
         (input_limit > 0 and ac_mode == 2)
         or (output_limit > 0 and ac_mode == 1)
@@ -254,18 +264,9 @@ async def execute_post(
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
-def _power_ac_mode(
-    props: dict,
-    current_ac_mode: int,
-    input_limit: int,
-    output_limit: int,
-) -> int:
+def _power_ac_mode(props: dict, current_ac_mode: int) -> int:
     if "acMode" in props:
         return _int(props["acMode"])
-    if input_limit > 0 and output_limit <= 0:
-        return 1
-    if output_limit > 0 and input_limit <= 0:
-        return 2
     return current_ac_mode
 
 

@@ -283,7 +283,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(sensors["sensor.vermogensopdracht_zendure_2"][0], 800)
         self.assertEqual(sensors["sensor.zendure_actief_device"][0], "Alle")
 
-    def test_post_infers_charge_mode_from_input_limit_without_ac_mode(self) -> None:
+    def test_post_uses_previous_charge_mode_for_input_limit_without_ac_mode(self) -> None:
         state = ProxyState(
             device_count=3,
             devices=[
@@ -292,6 +292,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
                 DeviceState(ip="ip3", sn="SN3", electric_level=81),
             ],
             max_power_in=800,
+            ac_mode=1,
         )
         clients = [_FakeClient() for _idx in range(3)]
 

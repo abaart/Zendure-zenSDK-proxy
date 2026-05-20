@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from zendure_proxy import ZendureProxy, should_repeat_last_power
 from zendure_proxy_config import Config, is_placeholder_device_ip, load_config
-from zendure_proxy_device_client import build_device_url
+from zendure_proxy_device_client import DeviceClient, build_device_url
 from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
+from zendure_proxy_post_handler import execute_post
 from zendure_proxy_power import now
 from zendure_proxy_standby import _delayed_standby, manage_standby
 from zendure_proxy_state import DeviceState, ProxyState
@@ -35,6 +37,13 @@ def test_manual_repeat_uses_node_red_guard_conditions() -> None:
 
     assert should_repeat_last_power(state, cfg, current_ts=1000) is True
 
+    state.latest_power_repeat_ts = 990
+    assert should_repeat_last_power(state, cfg, current_ts=1000) is False
+
+    state.latest_power_repeat_ts = 979
+    assert should_repeat_last_power(state, cfg, current_ts=1000) is True
+
+    state = _repeat_state()
     state.latest_power_message_ts = 990
     assert should_repeat_last_power(state, cfg, current_ts=1000) is False
 
@@ -220,6 +229,74 @@ def test_manage_standby_blocks_node_red_guard_conditions() -> None:
     assert state.devices[1].standby_task is None
 
 
+def test_periodic_standby_check_schedules_overdue_passive_device() -> None:
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", electric_level=50, smart_mode=1),
+            DeviceState(
+                ip="ip2",
+                sn="SN2",
+                electric_level=80,
+                smart_mode=1,
+                latest_power_cmd_zero_ts=now() - 400,
+            ),
+        ],
+        device_active_count=1,
+        devices_active_idx=[0],
+        ac_mode=1,
+        latest_power_cmd=500,
+        latest_get_ts=now(),
+    )
+    proxy = ZendureProxy.__new__(ZendureProxy)
+    proxy._state = state
+    proxy._clients = [FakeDeviceClient(), FakeDeviceClient()]
+    proxy._cfg = Config(device_ips=["ip1", "ip2"], standby_timer=300)
+    proxy._proxy_log = lambda *args, **kwargs: None
+
+    async def run_check() -> None:
+        await proxy._standby_check()
+        task = state.devices[1].standby_task
+        assert task is not None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_check())
+
+
+def test_smart_mode_one_post_can_schedule_standby_for_passive_device() -> None:
+    state = ProxyState(
+        device_count=2,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", electric_level=50, smart_mode=1),
+            DeviceState(ip="ip2", sn="SN2", electric_level=80, smart_mode=0),
+        ],
+        device_active_count=1,
+        devices_active_idx=[0],
+        ac_mode=1,
+        latest_power_cmd=500,
+        latest_get_ts=now(),
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    async def run_post() -> None:
+        await execute_post(
+            {"properties": {"smartMode": 1}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], standby_timer=300),
+            lambda *args, **kwargs: None,
+        )
+        task = state.devices[1].standby_task
+        assert task is not None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run_post())
+
+
 def test_serial_retry_populates_missing_serial_numbers() -> None:
     proxy = ZendureProxy.__new__(ZendureProxy)
     proxy._clients = [
@@ -362,6 +439,28 @@ def test_simulated_device_urls_and_placeholder_ips_are_compatible_with_node_red(
     assert load_config(
         {"ip_zendure_1": "192.168.x.x", "ip_zendure_2": "192.168.x.y"}
     ).device_ips == []
+
+
+def test_zendure_request_timeout_is_user_configurable() -> None:
+    cfg = load_config(
+        {
+            "ip_zendure_1": "192.168.1.101",
+            "zendure_request_timeout": "4.5",
+        }
+    )
+
+    assert cfg.zendure_request_timeout == 4.5
+
+    async def run_client() -> None:
+        client = DeviceClient(
+            "ip1",
+            lambda *args, **kwargs: None,
+            request_timeout=cfg.zendure_request_timeout,
+        )
+        assert client._session.kwargs["timeout"].total == 4.5
+        await client.close()
+
+    asyncio.run(run_client())
 
 
 async def _noop_publish(_response: dict) -> None:

@@ -37,6 +37,7 @@ from zendure_proxy_post_handler import execute_post
 from zendure_proxy_power import PROXY_VERSION, now
 from zendure_proxy_queue import RequestQueue
 from zendure_proxy_state import DeviceState, ProxyState
+from zendure_proxy_standby import manage_standby
 
 
 class ZendureProxy(hass.Hass):
@@ -54,7 +55,13 @@ class ZendureProxy(hass.Hass):
         await self._restore_metrics_counters_from_ha()
 
         self._clients: list[DeviceClient] = [
-            DeviceClient(ip, self._proxy_log, self._metrics, idx)
+            DeviceClient(
+                ip,
+                self._proxy_log,
+                self._metrics,
+                idx,
+                request_timeout=self._cfg.zendure_request_timeout,
+            )
             for idx, ip in enumerate(self._cfg.device_ips)
         ]
         self._state = ProxyState(
@@ -93,6 +100,12 @@ class ZendureProxy(hass.Hass):
                 "now",
                 self._cfg.metrics_ha_sensors_interval,
             )
+        if len(self._cfg.device_ips) > 1:
+            self._standby_check_timer = await self.run_every(
+                self._standby_check,
+                "now",
+                10,
+            )
         await self._start_server()
 
         if not self._cfg.device_ips:
@@ -111,6 +124,8 @@ class ZendureProxy(hass.Hass):
             )
 
     async def terminate(self) -> None:
+        if getattr(self, "_standby_check_timer", None):
+            await self.cancel_timer(self._standby_check_timer, silent=True)
         if getattr(self, "_metrics_sensor_timer", None):
             await self.cancel_timer(self._metrics_sensor_timer, silent=True)
         if getattr(self, "_diagnostics_route_handle", None):
@@ -661,6 +676,7 @@ class ZendureProxy(hass.Hass):
                 self._state.counter_get_replies += 1
                 status = 200
                 self._mark_passive_zero_timestamps()
+                await self._standby_check()
                 await self._publish_proxy_ha_sensors(data)
                 self._debug_capture_payload("GET", "To Home Assistant", data)
                 return data, status
@@ -739,6 +755,18 @@ class ZendureProxy(hass.Hass):
                 and device.latest_power_cmd_zero_ts <= 0
             ):
                 device.latest_power_cmd_zero_ts = stamp
+
+    async def _standby_check(self, _kwargs=None) -> None:
+        if self._state.device_count < 2:
+            return
+        await manage_standby(
+            self._state,
+            self._clients,
+            self._state.ac_mode,
+            [0] * self._state.device_count,
+            self._cfg,
+            self._proxy_log,
+        )
 
     # ── Queue processor ────────────────────────────────────────────────────────
 
@@ -892,6 +920,8 @@ def should_repeat_last_power(
         return False
     if state.latest_power_message_ts <= 0 or ts - state.latest_power_message_ts < 30:
         return False
+    if state.latest_power_repeat_ts > 0 and ts - state.latest_power_repeat_ts < 20:
+        return False
     if state.latest_get_ts <= 0 or ts - state.latest_get_ts > 10:
         return False
     if state.latest_power_cmd == 0:
@@ -915,10 +945,6 @@ def _repeat_payload_power_cmd(props: dict, current_ac_mode: int) -> int:
     output_limit = _int(props.get("outputLimit", 0))
     if "acMode" in props:
         ac_mode = _int(props["acMode"])
-    elif input_limit > 0 and output_limit <= 0:
-        ac_mode = 1
-    elif output_limit > 0 and input_limit <= 0:
-        ac_mode = 2
     else:
         ac_mode = current_ac_mode
 

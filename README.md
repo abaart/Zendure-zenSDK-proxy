@@ -91,6 +91,7 @@ zendure_proxy:
 
   server_host: "0.0.0.0"
   server_port: 8120
+  zendure_request_timeout: 15
 
   single_mode_upperlimit_percent: 100
   single_mode_lowerlimit_percent: 40

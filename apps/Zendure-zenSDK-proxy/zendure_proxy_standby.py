@@ -50,9 +50,10 @@ async def manage_standby(
             )
             should_standby = should_standby and _standby_allowed(i, state, cfg)
             if should_standby and dev.standby_task is None:
+                delay = _standby_delay(dev.latest_power_cmd_zero_ts, cfg.standby_timer)
                 dev.standby_task = asyncio.ensure_future(
                     _delayed_standby(
-                        i, state, clients, cfg.standby_timer, logger, cfg=cfg
+                        i, state, clients, delay, logger, cfg=cfg
                     )
                 )
             elif not should_standby and dev.standby_task:
@@ -77,6 +78,8 @@ async def _delayed_standby(
             return
         if idx not in state.devices_active_idx:
             zero_ts = dev.latest_power_cmd_zero_ts
+            if cfg is not None and zero_ts > 0 and now() - zero_ts < cfg.standby_timer:
+                return
             sent_key = dev.sn or f"device-{idx + 1}"
             if zero_ts > 0 and state.standby_last_sent_by_sn.get(sent_key) == zero_ts:
                 return
@@ -146,3 +149,9 @@ def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
         and dev.latest_power_cmd_zero_ts > 0
         and dev.smart_mode != 0
     )
+
+
+def _standby_delay(zero_ts: float, standby_timer: int) -> float:
+    if zero_ts <= 0:
+        return float(standby_timer)
+    return max(0.0, float(standby_timer) - (now() - zero_ts))

@@ -41,14 +41,21 @@ class DeviceRequest:
 class DeviceClient:
     """Thin wrapper around aiohttp with a per-device outgoing queue."""
 
-    def __init__(self, ip: str, logger: Callable, metrics=None, device_idx: int = 0):
+    def __init__(
+        self,
+        ip: str,
+        logger: Callable,
+        metrics=None,
+        device_idx: int = 0,
+        request_timeout: float = 15.0,
+    ):
         self.ip = ip
         self._log = logger
         self._metrics = metrics
         self._device_idx = device_idx
         self._local_proxy_url = ""
         self._session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=15)
+            timeout=aiohttp.ClientTimeout(total=request_timeout)
         )
         self._queue: asyncio.Queue[DeviceRequest] = asyncio.Queue()
         self._worker_task = asyncio.ensure_future(self._worker())

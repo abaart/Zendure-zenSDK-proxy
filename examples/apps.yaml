@@ -23,6 +23,10 @@ zendure_proxy:
   server_port: 8120
   server_host: "0.0.0.0"
 
+  # Timeout in seconds for each HTTP request from AppDaemon to a Zendure device.
+  # The default keeps the previous Python behavior.
+  zendure_request_timeout: 15
+
   # Mode-switching thresholds.
   # Above single_mode_upperlimit_percent * maxPower, switch to multi-device mode.
   # Below single_mode_lowerlimit_percent * maxPower, switch back to single device.

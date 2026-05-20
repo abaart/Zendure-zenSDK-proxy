@@ -17,6 +17,7 @@ class Config:
     # Server
     server_port: int = 8120
     server_host: str = "0.0.0.0"
+    zendure_request_timeout: float = 15.0
 
     # Mode-switching thresholds
     single_mode_upper_pct: int = 100
@@ -102,6 +103,7 @@ def load_config(args: dict) -> Config:
         device_ips=[ip for ip in raw if ip and not is_placeholder_device_ip(ip)],
         server_port=int(args.get("server_port", 8120)),
         server_host=str(args.get("server_host", "0.0.0.0")),
+        zendure_request_timeout=float(args.get("zendure_request_timeout", 15.0)),
         single_mode_upper_pct=int(args.get("single_mode_upperlimit_percent", 100)),
         single_mode_lower_pct=int(args.get("single_mode_lowerlimit_percent", 40)),
         device_change_diff=int(args.get("single_mode_change_device_diff", 5)),
