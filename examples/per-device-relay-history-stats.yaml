@@ -1,0 +1,99 @@
+# Home Assistant voorbeeld voor relais schakelingen per fysieke Zendure.
+#
+# Plak dit bestand in configuration.yaml, of kopieer de losse blokken naar
+# jouw bestaande `sensor:` en `template:` secties.
+#
+# Deze sensors gebruiken de AppDaemon/Python proxy sensors:
+# - sensor.zendure_1_modus
+# - sensor.zendure_2_modus
+# - sensor.zendure_3_modus
+#
+# De proxy sensors verschijnen na een AppDaemon restart wanneer
+# `proxy_ha_sensors_enabled` aan staat.
+
+sensor:
+  - platform: history_stats
+    name: "Zendure 1 Relais Schakelingen Opladen Vandaag"
+    unique_id: zendure_1_relais_schakelingen_opladen_vandaag
+    entity_id: sensor.zendure_1_modus
+    state: "Opladen"
+    type: count
+    start: "{{ today_at() if now() < today_at('23:59') else now() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: "Zendure 1 Relais Schakelingen Ontladen Vandaag"
+    unique_id: zendure_1_relais_schakelingen_ontladen_vandaag
+    entity_id: sensor.zendure_1_modus
+    state: "Ontladen"
+    type: count
+    start: "{{ today_at() if now() < today_at('23:59') else now() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: "Zendure 2 Relais Schakelingen Opladen Vandaag"
+    unique_id: zendure_2_relais_schakelingen_opladen_vandaag
+    entity_id: sensor.zendure_2_modus
+    state: "Opladen"
+    type: count
+    start: "{{ today_at() if now() < today_at('23:59') else now() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: "Zendure 2 Relais Schakelingen Ontladen Vandaag"
+    unique_id: zendure_2_relais_schakelingen_ontladen_vandaag
+    entity_id: sensor.zendure_2_modus
+    state: "Ontladen"
+    type: count
+    start: "{{ today_at() if now() < today_at('23:59') else now() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: "Zendure 3 Relais Schakelingen Opladen Vandaag"
+    unique_id: zendure_3_relais_schakelingen_opladen_vandaag
+    entity_id: sensor.zendure_3_modus
+    state: "Opladen"
+    type: count
+    start: "{{ today_at() if now() < today_at('23:59') else now() }}"
+    end: "{{ now() }}"
+
+  - platform: history_stats
+    name: "Zendure 3 Relais Schakelingen Ontladen Vandaag"
+    unique_id: zendure_3_relais_schakelingen_ontladen_vandaag
+    entity_id: sensor.zendure_3_modus
+    state: "Ontladen"
+    type: count
+    start: "{{ today_at() if now() < today_at('23:59') else now() }}"
+    end: "{{ now() }}"
+
+template:
+  - sensor:
+      - name: "Zendure 1 Relais Schakelingen Totaal Vandaag"
+        unique_id: zendure_1_relais_schakelingen_totaal_vandaag
+        icon: mdi:swap-vertical-bold
+        state_class: total_increasing
+        state: >
+          {% set ontladen = states('sensor.zendure_1_relais_schakelingen_ontladen_vandaag') | int(0) %}
+          {% set opladen = states('sensor.zendure_1_relais_schakelingen_opladen_vandaag') | int(0) %}
+          {% set totaal = ontladen + opladen - 1 %}
+          {{ totaal if totaal > 0 else 0 }}
+
+      - name: "Zendure 2 Relais Schakelingen Totaal Vandaag"
+        unique_id: zendure_2_relais_schakelingen_totaal_vandaag
+        icon: mdi:swap-vertical-bold
+        state_class: total_increasing
+        state: >
+          {% set ontladen = states('sensor.zendure_2_relais_schakelingen_ontladen_vandaag') | int(0) %}
+          {% set opladen = states('sensor.zendure_2_relais_schakelingen_opladen_vandaag') | int(0) %}
+          {% set totaal = ontladen + opladen - 1 %}
+          {{ totaal if totaal > 0 else 0 }}
+
+      - name: "Zendure 3 Relais Schakelingen Totaal Vandaag"
+        unique_id: zendure_3_relais_schakelingen_totaal_vandaag
+        icon: mdi:swap-vertical-bold
+        state_class: total_increasing
+        state: >
+          {% set ontladen = states('sensor.zendure_3_relais_schakelingen_ontladen_vandaag') | int(0) %}
+          {% set opladen = states('sensor.zendure_3_relais_schakelingen_opladen_vandaag') | int(0) %}
+          {% set totaal = ontladen + opladen - 1 %}
+          {{ totaal if totaal > 0 else 0 }}

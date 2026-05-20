@@ -202,6 +202,8 @@ def _power_mode_icon(state: str) -> str:
 
 
 def _relay_state(value: Any) -> str:
+    if value in (None, "", "unknown", "unavailable"):
+        return "Standby"
     return _map_int(value, {0: "Standby", 1: "Oplaadstand", 2: "Ontlaadstand"})
 
 

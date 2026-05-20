@@ -209,7 +209,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
     def test_proxy_sensor_builder_publishes_per_device_modes(self) -> None:
         results = [
             _device(1, "SN1", ac_mode=1, input_limit=500, grid_input_power=500),
-            _device(2, "SN2", ac_mode=0, input_limit=0, grid_input_power=0),
+            _device(2, "SN2", ac_mode=None, input_limit=0, grid_input_power=0),
             _device(
                 3,
                 "SN3",
@@ -314,6 +314,37 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
             [800, 799, 800],
         )
 
+    def test_zero_power_post_does_not_send_unknown_ac_mode_zero(self) -> None:
+        state = ProxyState(
+            device_count=2,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1", electric_level=80),
+                DeviceState(ip="ip2", sn="SN2", electric_level=80),
+            ],
+            max_power_in=800,
+            max_power_out=800,
+            ac_mode=0,
+        )
+        clients = [_FakeClient() for _idx in range(2)]
+
+        asyncio.run(
+            execute_post(
+                {"properties": {"inputLimit": 0, "outputLimit": 0}},
+                clients,
+                state,
+                Config(device_ips=["ip1", "ip2"]),
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        self.assertEqual(
+            [client.posts[0]["properties"] for client in clients],
+            [
+                {"inputLimit": 0, "outputLimit": 0},
+                {"inputLimit": 0, "outputLimit": 0},
+            ],
+        )
+
     def test_mqtt_discovery_keeps_unique_id_and_default_entity_id(self) -> None:
         config = mqtt_sensor_config(
             "sensor.zendure_2_serienummer",
@@ -395,7 +426,7 @@ def _device(
     idx: int,
     sn: str,
     *,
-    ac_mode: int = 1,
+    ac_mode: int | None = 1,
     input_limit: int = 100,
     output_limit: int = 0,
     grid_input_power: int | None = None,

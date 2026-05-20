@@ -117,7 +117,7 @@ async def execute_post(
         elif ac_mode == 2:
             dp = {"acMode": 2, "outputLimit": pwr}
         else:
-            dp = {"acMode": 0, "inputLimit": 0, "outputLimit": 0}
+            dp = {"inputLimit": 0, "outputLimit": 0}
         for k, v in props.items():
             if k not in _POWER_KEYS:
                 dp[k] = v

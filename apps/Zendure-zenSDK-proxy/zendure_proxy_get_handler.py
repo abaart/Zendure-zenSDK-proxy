@@ -317,9 +317,10 @@ def build_combined_response(
         for key in (
             "electricLevel", "latestPowerCmd", "outputPackPower",
             "packInputPower", "outputHomePower", "gridInputPower",
-            "acMode", "inputLimit", "outputLimit", "socStatus", "smartMode",
+            "inputLimit", "outputLimit", "socStatus", "smartMode",
         ):
             props[f"{key}{s}"] = 0
+        props[f"acMode{s}"] = None
         props[f"socLimit{s}"] = -1
         props[f"hyperTmp{s}"] = 2731
         props[f"sn{s}"] = ""
