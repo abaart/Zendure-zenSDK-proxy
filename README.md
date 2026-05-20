@@ -44,6 +44,34 @@ Home Assistant voorbeelden blijven afkomstig van de upstream repository van
 `gast777`, behalve waar deze fork expliciet AppDaemon/HACS documentatie toevoegt.
 De Node-RED implementatie blijft ongewijzigd in deze repository.
 
+### Bewust verschil met Node-RED bij drie Zendures
+
+De AppDaemon/Python implementatie probeert backwards compatible te zijn met de
+Node-RED implementatie. Er is één bewust verschil bij drie Zendures in Single
+Mode.
+
+Wanneer drie Zendures actief zijn in de proxy en de actieve Zendure door
+SoC-balancering wisselt, stuurt de Node-RED 3-Zendure code het vermogen direct
+naar de nieuw gekozen Zendure. Voorbeeld: de proxy krijgt een opdracht voor
+`500 W` laden, Zendure 1 was actief, en de SoC waarden zijn `80%`, `70%`, en
+`40%`. Node-RED kiest dan Zendure 3 als nieuwe actieve Zendure en kan de volle
+opdracht direct naar Zendure 3 sturen.
+
+De AppDaemon/Python implementatie kiest in die situatie bewust voor dezelfde
+overgang die Node-RED al gebruikt bij twee Zendures. Gedurende
+`singlemode_transition_timer`, standaard `40` seconden, blijven de oude en de
+nieuwe actieve Zendure tijdelijk samen actief. De oude actieve Zendure krijgt
+eerst ongeveer `95%` van het vermogen en de nieuwe actieve Zendure ongeveer
+`5%`. Daarna schuift het vermogen stapsgewijs naar `75%/25%`, `50%/50%`, en
+`25%/75%`. Na de timer krijgt de nieuwe actieve Zendure de opdracht alleen.
+
+Deze afwijking is bewust. Een Zendure die in slaapstand of lage activiteit
+stond, kan tijd nodig hebben om relais, modus, en vermogensregeling stabiel te
+krijgen. Direct van `0 W` naar de volledige opdracht springen kan onrustiger
+gedrag geven dan een korte overgang. De AppDaemon/Python implementatie gebruikt
+daarom bij drie Zendures dezelfde zachte overgang als bij twee Zendures, ook al
+slaat de Node-RED 3-Zendure code die overgang over.
+
 ## Robuust omgaan met uitval van Zendures
 
 De originele Node-RED versie van `gast777` blijft de basis voor de proxy-aanpak:
