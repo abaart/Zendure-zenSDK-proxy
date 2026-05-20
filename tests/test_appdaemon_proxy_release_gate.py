@@ -283,6 +283,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Opladen")
         self.assertEqual(sensors["sensor.zendure_2_relais_stand"][0], "Oplaadstand")
         self.assertEqual(sensors["sensor.dual_mode_demper_status"][0], "Aan")
+        self.assertIn("sensor.anti_pingpong_status", sensors)
         self.assertEqual(sensors["sensor.proxy_zendure_pool_healthy"][0], "Healthy")
 
     def test_proxy_sensor_builder_publishes_per_device_modes(self) -> None:

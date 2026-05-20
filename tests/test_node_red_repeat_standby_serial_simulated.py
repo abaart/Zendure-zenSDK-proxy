@@ -460,6 +460,75 @@ def test_zendure_request_timeout_is_user_configurable() -> None:
     asyncio.run(run_client())
 
 
+def test_anti_pingpong_grid_power_entity_uses_gielz_input_text() -> None:
+    proxy = ZendureProxy.__new__(ZendureProxy)
+    proxy._cfg = Config(
+        device_ips=["ip1"],
+        anti_pingpong_enable=True,
+        anti_pingpong_activation_mode="smart",
+    )
+    proxy._state = ProxyState(device_count=1, devices=[DeviceState(ip="ip1")])
+    proxy._proxy_log = lambda *args, **kwargs: None
+    states = {
+        "input_text.afwijkende_p1_sensor": "sensor.custom_p1_power",
+        "sensor.custom_p1_power": "123",
+    }
+    proxy.get_state = lambda entity_id, **_kwargs: states.get(entity_id)
+
+    entity_id = asyncio.run(proxy._resolve_anti_pingpong_grid_power_entity())
+
+    assert entity_id == "sensor.custom_p1_power"
+    assert proxy._state.anti_pingpong_grid_power_entity_source == (
+        "input_text.afwijkende_p1_sensor"
+        )
+
+
+def test_mode_switch_delay_accepts_old_pause_config_key() -> None:
+    cfg = load_config(
+        {
+            "ip_zendure_1": "192.168.1.101",
+            "anti_pingpong_mode_switch_pause_seconds": "45",
+        }
+    )
+
+    assert cfg.anti_pingpong_mode_switch_delay_seconds == 45
+    assert cfg.anti_pingpong_mode_switch_pause_seconds == 45
+
+    cfg = load_config(
+        {
+            "ip_zendure_1": "192.168.1.101",
+            "anti_pingpong_mode_switch_delay_seconds": "60",
+            "anti_pingpong_mode_switch_pause_seconds": "45",
+        }
+    )
+
+    assert cfg.anti_pingpong_mode_switch_delay_seconds == 60
+    assert cfg.anti_pingpong_mode_switch_pause_seconds == 60
+
+
+def test_anti_pingpong_grid_power_entity_falls_back_to_homewizard() -> None:
+    proxy = ZendureProxy.__new__(ZendureProxy)
+    proxy._cfg = Config(
+        device_ips=["ip1"],
+        anti_pingpong_enable=True,
+        anti_pingpong_activation_mode="smart",
+    )
+    proxy._state = ProxyState(device_count=1, devices=[DeviceState(ip="ip1")])
+    proxy._proxy_log = lambda *args, **kwargs: None
+    states = {
+        "input_text.afwijkende_p1_sensor": "",
+        "sensor.homewizard_p1_vermogen": "456",
+    }
+    proxy.get_state = lambda entity_id, **_kwargs: states.get(entity_id)
+
+    entity_id = asyncio.run(proxy._resolve_anti_pingpong_grid_power_entity())
+
+    assert entity_id == "sensor.homewizard_p1_vermogen"
+    assert proxy._state.anti_pingpong_grid_power_entity_source == (
+        "sensor.homewizard_p1_vermogen"
+    )
+
+
 async def _noop_publish(_response: dict) -> None:
     return None
 

@@ -30,6 +30,12 @@ from zendure_proxy_config import Config, load_config
 from zendure_proxy_device_client import DeviceClient
 from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors
+from zendure_proxy_anti_pingpong import (
+    activation_mode,
+    reserve_discharge_capacity_watts,
+    smart_evaluate_window,
+    smart_sample_grid_power,
+)
 from zendure_proxy_health import (
     cache_is_usable,
     eligible_device_indices,
@@ -112,6 +118,21 @@ class ZendureProxy(hass.Hass):
                 "now",
                 10,
             )
+        if (
+            self._cfg.anti_pingpong_enable
+            and activation_mode(self._cfg) == "smart"
+        ):
+            await self._resolve_anti_pingpong_grid_power_entity()
+            self._anti_pingpong_sample_timer = await self.run_every(
+                self._anti_pingpong_sample_grid_power,
+                "now",
+                self._cfg.anti_pingpong_smart_sample_interval_seconds,
+            )
+            self._anti_pingpong_eval_timer = await self.run_every(
+                self._anti_pingpong_evaluate_smart,
+                "now",
+                self._cfg.anti_pingpong_smart_evaluate_interval_seconds,
+            )
         await self._start_server()
 
         if not self._cfg.device_ips:
@@ -130,6 +151,10 @@ class ZendureProxy(hass.Hass):
             )
 
     async def terminate(self) -> None:
+        if getattr(self, "_anti_pingpong_eval_timer", None):
+            await self.cancel_timer(self._anti_pingpong_eval_timer, silent=True)
+        if getattr(self, "_anti_pingpong_sample_timer", None):
+            await self.cancel_timer(self._anti_pingpong_sample_timer, silent=True)
         if getattr(self, "_standby_check_timer", None):
             await self.cancel_timer(self._standby_check_timer, silent=True)
         if getattr(self, "_metrics_sensor_timer", None):
@@ -212,6 +237,91 @@ class ZendureProxy(hass.Hass):
                 level="WARNING",
             )
             return None
+
+    async def _resolve_anti_pingpong_grid_power_entity(self) -> str:
+        configured = self._cfg.anti_pingpong_grid_power_entity
+        if configured:
+            self._state.anti_pingpong_grid_power_entity_resolved = configured
+            self._state.anti_pingpong_grid_power_entity_source = "config"
+            return configured
+
+        if not self._cfg.anti_pingpong_grid_power_autodiscover:
+            return ""
+
+        try:
+            raw_entity = await self._resolve_appdaemon_result(
+                self.get_state("input_text.afwijkende_p1_sensor")
+            )
+        except Exception:
+            raw_entity = None
+        candidate = str(raw_entity or "").strip()
+        if self._valid_ha_entity_id(candidate) and await self._ha_entity_exists(candidate):
+            self._state.anti_pingpong_grid_power_entity_resolved = candidate
+            self._state.anti_pingpong_grid_power_entity_source = (
+                "input_text.afwijkende_p1_sensor"
+            )
+            return candidate
+
+        homewizard = "sensor.homewizard_p1_vermogen"
+        if await self._ha_entity_exists(homewizard):
+            self._state.anti_pingpong_grid_power_entity_resolved = homewizard
+            self._state.anti_pingpong_grid_power_entity_source = homewizard
+            return homewizard
+
+        if not getattr(self, "_anti_pingpong_grid_warning_logged", False):
+            self._proxy_log(
+                "Reserve mode smart calculation could not find a P1 power entity; "
+                "set anti_pingpong_grid_power_entity or configure "
+                "input_text.afwijkende_p1_sensor / sensor.homewizard_p1_vermogen",
+                level="WARNING",
+            )
+            self._anti_pingpong_grid_warning_logged = True
+        return ""
+
+    async def _ha_entity_exists(self, entity_id: str) -> bool:
+        if not self._valid_ha_entity_id(entity_id):
+            return False
+        try:
+            value = await self._resolve_appdaemon_result(self.get_state(entity_id))
+        except Exception:
+            return False
+        return value is not None and value not in ("unknown", "unavailable", "")
+
+    @staticmethod
+    def _valid_ha_entity_id(value: str) -> bool:
+        if value in ("", "unknown", "unavailable", "none"):
+            return False
+        return "." in value and " " not in value
+
+    async def _anti_pingpong_sample_grid_power(self, _kwargs=None) -> None:
+        if not self._cfg.anti_pingpong_enable or activation_mode(self._cfg) != "smart":
+            return
+        entity_id = self._state.anti_pingpong_grid_power_entity_resolved
+        if not entity_id:
+            entity_id = await self._resolve_anti_pingpong_grid_power_entity()
+        if not entity_id:
+            return
+        try:
+            raw_value = await self._resolve_appdaemon_result(self.get_state(entity_id))
+            grid_power = float(raw_value)
+        except Exception as exc:
+            self._proxy_log(
+                f"Reserve mode smart sample failed for {entity_id}: {exc}",
+                level="WARNING",
+            )
+            return
+        if not self._cfg.anti_pingpong_grid_power_import_positive:
+            grid_power *= -1
+        smart_sample_grid_power(self._state, self._cfg, grid_power, now())
+
+    async def _anti_pingpong_evaluate_smart(self, _kwargs=None) -> None:
+        if not self._cfg.anti_pingpong_enable or activation_mode(self._cfg) != "smart":
+            return
+        eligible = eligible_device_indices(self._state, self._cfg)
+        reserve_capacity = reserve_discharge_capacity_watts(
+            self._state, self._cfg, eligible
+        )
+        smart_evaluate_window(self._state, self._cfg, reserve_capacity, now())
 
     async def _logs_dashboard(
         self, request: aiohttp.web.Request, _kwargs

@@ -205,3 +205,51 @@ def test_absent_devices_use_node_red_unknown_smart_mode_value() -> None:
     assert response["properties"]["smartMode_1"] == 1
     assert response["properties"]["smartMode_2"] == -1
     assert response["properties"]["smartMode_3"] == -1
+
+
+def test_anti_pingpong_metadata_reports_net_and_device_power() -> None:
+    results = [
+        device_response(1, "SN1", properties={"acMode": 1, "inputLimit": 530}),
+        device_response(2, "SN2", properties={"acMode": 2, "outputLimit": 30}),
+    ]
+    state = _state_for(results, active_idx=[0])
+    state.anti_pingpong_active = True
+    state.anti_pingpong_service_idx = [0]
+    state.anti_pingpong_reserve_idx = [1]
+    state.anti_pingpong_paused_idx = [1]
+    state.anti_pingpong_reserve_power_watts = 30
+    state.anti_pingpong_grid_power_entity_resolved = "sensor.homewizard_p1_vermogen"
+    state.anti_pingpong_grid_power_entity_source = "sensor.homewizard_p1_vermogen"
+    state.anti_pingpong_smart_gain_kwh = 0.001
+    state.anti_pingpong_smart_loss_kwh = 0.0002
+    state.anti_pingpong_smart_net_eur = 0.00024
+    state.input_limit = 500
+    state.input_limit_effective = 500
+    state.latest_power_cmd = 500
+    state.devices[0].latest_power_cmd = 530
+    state.devices[1].latest_power_cmd = -30
+
+    response = build_combined_response(
+        results,
+        state,
+        Config(
+            device_ips=["ip1", "ip2"],
+            anti_pingpong_enable=True,
+            anti_pingpong_activation_mode="smart",
+        ),
+    )
+
+    props = response["properties"]
+    assert props["inputLimit"] == 500
+    assert props["outputLimit"] == 0
+    assert props["latestPowerCmd_1"] == 530
+    assert props["latestPowerCmd_2"] == -30
+    assert props["antiPingpongActive"] == 1
+    assert props["antiPingpongReserveDevice"] == 2
+    assert props["antiPingpongDelayedDevice"] == 2
+    assert props["antiPingpongModeSwitchDelaySeconds"] == 30
+    assert props["antiPingpongModeSwitchDominanceWindowSeconds"] == 120
+    assert props["antiPingpongGridPowerEntity"] == "sensor.homewizard_p1_vermogen"
+    assert props["antiPingpongSmartGainKwh"] == 0.001
+    assert props["antiPingpongSmartLossKwh"] == 0.0002
+    assert props["antiPingpongSmartNetEur"] == 0.00024

@@ -33,6 +33,12 @@ async def manage_standby(
     eligible = eligible_device_indices(state, cfg)
     eligible_set = set(eligible)
     active_set = set(state.devices_active_idx) & eligible_set
+    protected_set = set()
+    if getattr(state, "anti_pingpong_active", False):
+        protected_set = (
+            set(getattr(state, "anti_pingpong_reserve_idx", []))
+            | set(getattr(state, "anti_pingpong_paused_idx", []))
+        ) & eligible_set
     devs = state.devices
 
     for i, dev in enumerate(devs):
@@ -41,11 +47,11 @@ async def manage_standby(
                 dev.standby_task.cancel()
             dev.standby_task = None
             continue
-        if i in active_set:
+        if i in active_set or i in protected_set:
             if dev.standby_task and not dev.standby_task.done():
                 dev.standby_task.cancel()
             dev.standby_task = None
-            if dev.smart_mode == 0 and per_device[i] > 0:
+            if dev.smart_mode == 0 and (per_device[i] > 0 or i in protected_set):
                 await clients[i].post(
                     {"sn": dev.sn, "properties": {"smartMode": 1}}
                 )
@@ -124,6 +130,11 @@ def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
     if idx not in eligible:
         return False
     if idx in state.devices_active_idx:
+        return False
+    if getattr(state, "anti_pingpong_active", False) and idx in (
+        set(getattr(state, "anti_pingpong_reserve_idx", []))
+        | set(getattr(state, "anti_pingpong_paused_idx", []))
+    ):
         return False
     if idx >= len(state.devices):
         return False

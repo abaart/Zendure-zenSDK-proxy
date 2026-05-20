@@ -208,6 +208,87 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         icon="mdi:battery",
     )
     add(
+        "sensor.anti_pingpong_status",
+        _on_off(props.get("antiPingpongActive", 0)),
+        "Reserve Mode Status",
+        icon="mdi:swap-horizontal-bold",
+    )
+    add(
+        "sensor.anti_pingpong_activatie_modus",
+        props.get("antiPingpongActivationMode", "threshold"),
+        "Reserve Mode Activatie Modus",
+        icon="mdi:tune",
+    )
+    add(
+        "sensor.anti_pingpong_p1_sensor",
+        props.get("antiPingpongGridPowerEntity", ""),
+        "Reserve Mode P1 Sensor",
+        icon="mdi:flash",
+    )
+    add(
+        "sensor.anti_pingpong_p1_sensor_bron",
+        props.get("antiPingpongGridPowerEntitySource", ""),
+        "Reserve Mode P1 Sensor Bron",
+        icon="mdi:source-branch",
+    )
+    add(
+        "sensor.anti_pingpong_reserve_device",
+        _active_device(props.get("antiPingpongReserveDevice", 0)),
+        "Reserve Mode Reserve Device",
+        icon="mdi:battery-clock",
+    )
+    add(
+        "sensor.anti_pingpong_gepauzeerd_device",
+        _active_device(
+            props.get(
+                "antiPingpongDelayedDevice",
+                props.get("antiPingpongPausedDevice", 0),
+            )
+        ),
+        "Reserve Mode Vertraagd Device",
+        icon="mdi:timer-pause",
+    )
+    add(
+        "sensor.anti_pingpong_reserve_power",
+        props.get("antiPingpongReservePower", 0),
+        "Reserve Mode Reserve Power",
+        unit_of_measurement="W",
+        state_class="measurement",
+        device_class="power",
+    )
+    add(
+        "sensor.anti_pingpong_service_boost",
+        props.get("antiPingpongServiceBoost", 0),
+        "Reserve Mode Service Boost",
+        unit_of_measurement="W",
+        state_class="measurement",
+        device_class="power",
+    )
+    add(
+        "sensor.anti_pingpong_smart_winst_kwh",
+        props.get("antiPingpongSmartGainKwh", 0),
+        "Reserve Mode Smart Winst",
+        unit_of_measurement="kWh",
+        state_class="measurement",
+        device_class="energy",
+    )
+    add(
+        "sensor.anti_pingpong_smart_verlies_kwh",
+        props.get("antiPingpongSmartLossKwh", 0),
+        "Reserve Mode Smart Verlies",
+        unit_of_measurement="kWh",
+        state_class="measurement",
+        device_class="energy",
+    )
+    add(
+        "sensor.anti_pingpong_smart_netto_euro",
+        props.get("antiPingpongSmartNetEur", 0),
+        "Reserve Mode Smart Netto Euro",
+        unit_of_measurement="€",
+        state_class="measurement",
+        icon="mdi:currency-eur",
+    )
+    add(
         "sensor.dual_mode_demper_status",
         _on_off(props.get("dualModeDamper", 1 if props.get("dualModeDamper") else 0)),
         "Dual Mode Demper Status",
