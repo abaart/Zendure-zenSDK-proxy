@@ -23,6 +23,8 @@ class DeviceState:
     gridoff_mode: int = 2
     latest_power_cmd: int = 0      # Last power command (W) sent to this device
     latest_power_cmd_zero_ts: float = 0.0
+    latest_ac_mode_cmd: int = 0
+    latest_ac_mode_change_ts: float = 0.0
     last_response: Optional[dict] = None
     last_successful_get_ts: float = 0.0
     last_failed_get_ts: float = 0.0
@@ -76,6 +78,26 @@ class ProxyState:
     dualmode_damper_enabled: bool = False
     dualmode_damper_active: bool = False
     dualmode_damper_start_ts: float = 0.0
+
+    # Reserve mode state. Field names keep the anti_pingpong prefix for compatibility.
+    anti_pingpong_active: bool = False
+    anti_pingpong_until_ts: float = 0.0
+    anti_pingpong_last_sign: int = 0
+    anti_pingpong_flip_times: list[float] = field(default_factory=list)
+    anti_pingpong_power_samples: list[tuple[float, int]] = field(default_factory=list)
+    anti_pingpong_service_idx: list[int] = field(default_factory=list)
+    anti_pingpong_reserve_idx: list[int] = field(default_factory=list)
+    anti_pingpong_paused_idx: list[int] = field(default_factory=list)
+    anti_pingpong_reserve_power_watts: int = 0
+    anti_pingpong_last_reason: str = ""
+    anti_pingpong_grid_power_entity_resolved: str = ""
+    anti_pingpong_grid_power_entity_source: str = ""
+    anti_pingpong_grid_samples: list[tuple[float, float]] = field(default_factory=list)
+    anti_pingpong_smart_last_eval_ts: float = 0.0
+    anti_pingpong_smart_gain_kwh: float = 0.0
+    anti_pingpong_smart_loss_kwh: float = 0.0
+    anti_pingpong_smart_net_eur: float = 0.0
+    anti_pingpong_smart_bad_minutes: int = 0
 
     # Flags
     ac_mode_inconsistent: bool = False

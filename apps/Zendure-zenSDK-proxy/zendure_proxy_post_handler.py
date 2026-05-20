@@ -10,9 +10,18 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
+from zendure_proxy_anti_pingpong import (
+    activation_mode,
+    apply_mode_switch_delay,
+    clear_command_state,
+    dominant_power_sign,
+    record_power_direction,
+    select_anti_pingpong_split,
+    threshold_active,
+)
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_health import eligible_device_indices
+from zendure_proxy_health import degraded_power_by_index, eligible_device_indices
 from zendure_proxy_power import apply_transition, calc_active_count, distribute_power, now
 from zendure_proxy_standby import manage_standby
 from zendure_proxy_state import ProxyState
@@ -42,6 +51,7 @@ async def execute_post(
     devs = state.devices
     eligible = eligible_device_indices(state, cfg)
     eligible_set = set(eligible)
+    degraded_power = degraded_power_by_index(state, cfg)
     runtime_key = _first_runtime_mode_key(props)
     if runtime_key is not None:
         _apply_runtime_mode_prop(runtime_key, props[runtime_key], state)
@@ -122,7 +132,8 @@ async def execute_post(
 
     command_power = input_limit if ac_mode == 1 else (output_limit if ac_mode == 2 else 0)
     latest_power_cmd = _signed_power_cmd(ac_mode, command_power)
-    distribution_power = command_power
+    distribution_power = _residual_power_for_healthy(latest_power_cmd, degraded_power)
+    record_power_direction(state, cfg, latest_power_cmd, is_repeat, now_ts)
 
     max_power = (state.max_power_in if ac_mode == 1 else state.max_power_out) or 800
 
@@ -134,9 +145,13 @@ async def execute_post(
         or state.equal_mode
         or state.always_dual_mode
     )
+    anti_activation_active = _anti_pingpong_activation_active(
+        state, cfg, latest_power_cmd, invalid_direction, force_all, now_ts
+    )
 
     if (
         not invalid_direction
+        and not anti_activation_active
         and (cfg.damper_enable or state.dualmode_damper_enabled)
         and ac_mode == 2
         and len(eligible) >= 2
@@ -206,40 +221,103 @@ async def execute_post(
 
     outbound_props = dict(props)
     _apply_aggregate_limit_props(outbound_props, state, devs, eligible)
+    anti_payloads: dict[int, dict] | None = None
+    anti_abs_power: list[int] = [0] * n
+    anti_signed_power: list[int] = [0] * n
+    if anti_activation_active:
+        split = select_anti_pingpong_split(
+            state, cfg, ac_mode, eligible, distribution_power, max_power
+        )
+        if split.active:
+            state.anti_pingpong_service_idx = list(split.service_idx)
+            state.anti_pingpong_reserve_idx = list(split.reserve_idx)
+            state.anti_pingpong_reserve_power_watts = sum(
+                split.reserve_power_by_idx.values()
+            )
+            state.anti_pingpong_last_reason = split.reason
+            state.devices_active_idx = list(split.service_idx)
+            state.device_active_count = len(split.service_idx)
+            per_device = _calc_per_device_power(
+                state, ac_mode, split.service_power, max_power, cfg
+            )
+            anti_payloads = _anti_pingpong_payloads(
+                state,
+                cfg,
+                ac_mode,
+                per_device,
+                split.reserve_power_by_idx,
+                now_ts,
+            )
+            anti_signed_power = [
+                _payload_signed_power(anti_payloads.get(i, {}))
+                for i in range(n)
+            ]
+            anti_abs_power = [abs(power) for power in anti_signed_power]
+        else:
+            clear_command_state(state)
+            state.anti_pingpong_last_reason = split.reason
+    else:
+        clear_command_state(state)
+
+    if anti_payloads is None:
+        anti_payloads = _dominant_mode_delay_payloads(
+            state, cfg, ac_mode, per_device, invalid_direction, force_all, now_ts
+        )
+        if anti_payloads:
+            anti_signed_power = [
+                _payload_signed_power(anti_payloads.get(i, {}))
+                for i in range(n)
+            ]
+            anti_abs_power = [abs(power) for power in anti_signed_power]
 
     # ── Send commands to all devices in parallel ───────────────────────────────
     tasks = []
     for i, client in enumerate(clients):
         if i not in eligible_set:
+            _record_device_power_command(
+                devs[i], degraded_power.get(i, 0), now_ts
+            )
             continue
-        pwr = per_device[i]
+        pwr = anti_abs_power[i] if anti_payloads is not None else per_device[i]
         wake_standby_device = (
             not invalid_direction
-            and pwr != 0
+            and (
+                pwr != 0
+                or i in state.anti_pingpong_reserve_idx
+                or i in state.anti_pingpong_paused_idx
+            )
             and getattr(devs[i], "standby_device", False)
         )
-        dp = _power_payload_for_device(
-            props,
-            ac_mode,
-            pwr,
-            invalid_direction,
-            include_ac_mode=state.ac_mode_inconsistent or wake_standby_device,
-        )
+        if anti_payloads is not None and i in anti_payloads:
+            dp = dict(anti_payloads[i])
+        else:
+            dp = _power_payload_for_device(
+                props,
+                ac_mode,
+                pwr,
+                invalid_direction,
+                include_ac_mode=state.ac_mode_inconsistent or wake_standby_device,
+            )
         for k, v in outbound_props.items():
             if k not in _POWER_KEYS:
                 dp[k] = v
         if wake_standby_device:
-            dp["acMode"] = ac_mode
             dp["smartMode"] = 1
             devs[i].smart_mode = 1
             devs[i].standby_device = False
             devs[i].latest_power_cmd_zero_ts = 0.0
+        _record_ac_mode_command(devs[i], dp, now_ts)
         device_payload: dict = {"properties": dp}
         if devs[i].sn:
             device_payload["sn"] = devs[i].sn
         if not _suppress_standby_post(devs[i], dp):
             tasks.append(client.post(device_payload))
-        _record_device_power_command(devs[i], _signed_power_cmd(ac_mode, pwr), now_ts)
+        signed_power = (
+            anti_signed_power[i]
+            if anti_payloads is not None and i in anti_payloads
+            else _signed_power_cmd(ac_mode, pwr)
+        )
+        _record_device_power_command(devs[i], signed_power, now_ts)
 
     removed_active = set(prev_active_idx) - set(state.devices_active_idx)
     added_active = set(state.devices_active_idx) - set(prev_active_idx)
@@ -257,10 +335,18 @@ async def execute_post(
     state.latest_power_cmd = latest_power_cmd
     if ac_mode == 1:
         state.input_limit = input_limit
-        state.input_limit_effective = sum(per_device)
+        state.input_limit_effective = (
+            input_limit
+            if anti_payloads is not None
+            else _effective_input_power(per_device, degraded_power)
+        )
     elif ac_mode == 2:
         state.output_limit = output_limit
-        state.output_limit_effective = sum(per_device)
+        state.output_limit_effective = (
+            output_limit
+            if anti_payloads is not None
+            else _effective_output_power(per_device, degraded_power)
+        )
     if not is_repeat:
         state.last_post_payload = payload
 
@@ -397,6 +483,146 @@ def _signed_power_cmd(ac_mode: int, power: int) -> int:
     if ac_mode == 2:
         return -power
     return 0
+
+
+def _residual_power_for_healthy(
+    requested_power: int,
+    degraded_power: dict[int, int],
+) -> int:
+    residual = requested_power - sum(degraded_power.values())
+    if requested_power > 0:
+        return max(0, residual)
+    if requested_power < 0:
+        return max(0, -residual)
+    return 0
+
+
+def _effective_input_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
+    degraded_input = sum(power for power in degraded_power.values() if power > 0)
+    return sum(per_device) + degraded_input
+
+
+def _effective_output_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
+    degraded_output = sum(-power for power in degraded_power.values() if power < 0)
+    return sum(per_device) + degraded_output
+
+
+def _anti_pingpong_activation_active(
+    state: ProxyState,
+    cfg: Config,
+    latest_power_cmd: int,
+    invalid_direction: bool,
+    force_all: bool,
+    now_ts: float,
+) -> bool:
+    if (
+        invalid_direction
+        or force_all
+        or not getattr(cfg, "anti_pingpong_enable", False)
+        or latest_power_cmd == 0
+    ):
+        return False
+    if activation_mode(cfg) == "smart":
+        return bool(state.anti_pingpong_active)
+    return threshold_active(state, cfg, latest_power_cmd, now_ts)
+
+
+def _anti_pingpong_payloads(
+    state: ProxyState,
+    cfg: Config,
+    ac_mode: int,
+    per_device: list[int],
+    reserve_power_by_idx: dict[int, int],
+    now_ts: float,
+) -> dict[int, dict]:
+    desired: dict[int, dict] = {}
+    for idx in state.anti_pingpong_service_idx:
+        desired[idx] = _full_power_payload(ac_mode, per_device[idx])
+    reserve_ac_mode = 2 if ac_mode == 1 else 1
+    for idx, reserve_power in reserve_power_by_idx.items():
+        desired[idx] = _full_power_payload(reserve_ac_mode, reserve_power)
+    return apply_mode_switch_delay(state, cfg, desired, now_ts)
+
+
+def _dominant_mode_delay_payloads(
+    state: ProxyState,
+    cfg: Config,
+    ac_mode: int,
+    per_device: list[int],
+    invalid_direction: bool,
+    force_all: bool,
+    now_ts: float,
+) -> dict[int, dict] | None:
+    if (
+        invalid_direction
+        or force_all
+        or not getattr(cfg, "anti_pingpong_enable", False)
+        or getattr(state, "anti_pingpong_active", False)
+        or ac_mode not in (1, 2)
+    ):
+        return None
+
+    desired_sign = 1 if ac_mode == 1 else -1
+    dominant_sign = dominant_power_sign(state, cfg, now_ts)
+    if dominant_sign == 0 or dominant_sign == desired_sign:
+        return None
+
+    delay_ac_mode = 1 if dominant_sign > 0 else 2
+    delay_power = max(0, int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)))
+    payloads: dict[int, dict] = {}
+    delayed_idx: list[int] = []
+    for idx, power in enumerate(per_device):
+        if power <= 0:
+            continue
+        payloads[idx] = _delay_payload_for_device(
+            delay_ac_mode,
+            state.devices[idx].soc_limit,
+            delay_power,
+        )
+        delayed_idx.append(idx)
+
+    if not payloads:
+        return None
+
+    state.anti_pingpong_paused_idx = delayed_idx
+    state.anti_pingpong_last_reason = (
+        "dominant_charge_delay" if dominant_sign > 0 else "dominant_discharge_delay"
+    )
+    return payloads
+
+
+def _full_power_payload(ac_mode: int, power: int) -> dict:
+    if ac_mode == 1:
+        return {"acMode": 1, "inputLimit": power, "outputLimit": 0}
+    if ac_mode == 2:
+        return {"acMode": 2, "inputLimit": 0, "outputLimit": power}
+    return {"acMode": 0, "inputLimit": 0, "outputLimit": 0}
+
+
+def _delay_payload_for_device(ac_mode: int, soc_limit: int, power: int) -> dict:
+    if ac_mode == 1:
+        return {"acMode": 1, "inputLimit": 0 if soc_limit == 1 else power, "outputLimit": 0}
+    if ac_mode == 2:
+        return {"acMode": 2, "inputLimit": 0, "outputLimit": 0 if soc_limit == 2 else power}
+    return {"acMode": 0, "inputLimit": 0, "outputLimit": 0}
+
+
+def _payload_signed_power(payload: dict) -> int:
+    ac_mode = _int(payload.get("acMode", 0))
+    if ac_mode == 1:
+        return max(0, _int(payload.get("inputLimit", 0)))
+    if ac_mode == 2:
+        return -max(0, _int(payload.get("outputLimit", 0)))
+    return 0
+
+
+def _record_ac_mode_command(dev, payload: dict, now_ts: float) -> None:
+    ac_mode = _int(payload.get("acMode", 0))
+    if ac_mode not in (1, 2):
+        return
+    if dev.latest_ac_mode_cmd != ac_mode:
+        dev.latest_ac_mode_change_ts = now_ts
+    dev.latest_ac_mode_cmd = ac_mode
 
 
 def _suppress_standby_post(dev, props: dict) -> bool:

@@ -91,6 +91,9 @@ def _update_device_state(idx: int, data: dict, state: ProxyState) -> None:
     dev.charge_max_limit = props.get("chargeMaxLimit", dev.charge_max_limit)
     dev.inverse_max_power = props.get("inverseMaxPower", dev.inverse_max_power)
     dev.gridoff_mode = props.get("gridOffMode", dev.gridoff_mode)
+    ac_mode = _int(props.get("acMode", 0))
+    if ac_mode in (1, 2) and dev.latest_ac_mode_cmd == 0:
+        dev.latest_ac_mode_cmd = ac_mode
     if data.get("sn"):
         dev.sn = data["sn"]
 
@@ -196,6 +199,18 @@ def build_combined_response(
         and output_raw == state.output_limit_effective
         else output_raw
     )
+    anti_command_active = bool(
+        getattr(state, "anti_pingpong_service_idx", [])
+        or getattr(state, "anti_pingpong_reserve_idx", [])
+        or getattr(state, "anti_pingpong_paused_idx", [])
+    )
+    if anti_command_active:
+        if state.latest_power_cmd > 0:
+            props["inputLimit"] = state.input_limit
+            props["outputLimit"] = 0
+        elif state.latest_power_cmd < 0:
+            props["inputLimit"] = 0
+            props["outputLimit"] = state.output_limit
 
     inv_raw = sum(devs[i].inverse_max_power for i in included)
     props["inverseMaxPower"] = (
@@ -311,6 +326,7 @@ def build_combined_response(
         any(getattr(devs[i], "standby_device", False) for i in included)
         or _transition_recent(state, cfg)
         or state.dualmode_damper_active
+        or getattr(state, "anti_pingpong_active", False)
     ):
         props["smartMode"] = max(smart_modes) if smart_modes else 0
     else:
@@ -433,6 +449,40 @@ def build_combined_response(
     props["dualModeDamper"] = 1 if (
         state.dualmode_damper_enabled or cfg.damper_enable
     ) else 0
+    props["antiPingpong"] = 1 if cfg.anti_pingpong_enable else 0
+    props["antiPingpongActive"] = 1 if state.anti_pingpong_active else 0
+    props["antiPingpongActivationMode"] = cfg.anti_pingpong_activation_mode
+    props["antiPingpongGridPowerEntity"] = (
+        state.anti_pingpong_grid_power_entity_resolved
+    )
+    props["antiPingpongGridPowerEntitySource"] = (
+        state.anti_pingpong_grid_power_entity_source
+    )
+    props["antiPingpongServiceDevice"] = _idx_mask(state.anti_pingpong_service_idx)
+    props["antiPingpongReserveDevice"] = _idx_mask(state.anti_pingpong_reserve_idx)
+    props["antiPingpongPausedDevice"] = _idx_mask(state.anti_pingpong_paused_idx)
+    props["antiPingpongDelayedDevice"] = _idx_mask(state.anti_pingpong_paused_idx)
+    props["antiPingpongReservePower"] = state.anti_pingpong_reserve_power_watts
+    props["antiPingpongServiceBoost"] = state.anti_pingpong_reserve_power_watts
+    props["antiPingpongModeSwitchPauseSeconds"] = (
+        cfg.anti_pingpong_mode_switch_delay_seconds
+    )
+    props["antiPingpongModeSwitchDelaySeconds"] = (
+        cfg.anti_pingpong_mode_switch_delay_seconds
+    )
+    props["antiPingpongModeSwitchDominanceWindowSeconds"] = (
+        cfg.anti_pingpong_mode_switch_dominance_window_seconds
+    )
+    props["antiPingpongSmartGainKwh"] = round(
+        state.anti_pingpong_smart_gain_kwh, 6
+    )
+    props["antiPingpongSmartLossKwh"] = round(
+        state.anti_pingpong_smart_loss_kwh, 6
+    )
+    props["antiPingpongSmartNetEur"] = round(
+        state.anti_pingpong_smart_net_eur, 6
+    )
+    props["antiPingpongReason"] = state.anti_pingpong_last_reason
     props["proxyVersion"] = PROXY_VERSION
     props["latestPowerCmd"] = latest_power_cmd
     props["device_active_count"] = state.device_active_count
@@ -529,6 +579,14 @@ def _active_device_mask(
         active_idx = [state.single_mode_active_device]
     mask = 0
     for idx in active_idx:
+        if 0 <= idx < 3:
+            mask |= 1 << idx
+    return mask
+
+
+def _idx_mask(indices: list[int]) -> int:
+    mask = 0
+    for idx in indices:
         if 0 <= idx < 3:
             mask |= 1 << idx
     return mask

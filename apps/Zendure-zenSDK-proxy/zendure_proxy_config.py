@@ -51,6 +51,30 @@ class Config:
     always_dual_mode: bool = False
     equal_mode: bool = False
 
+    # Reserve mode. Config keys keep the anti_pingpong prefix for compatibility.
+    anti_pingpong_enable: bool = False
+    anti_pingpong_activation_mode: str = "threshold"
+    anti_pingpong_window_seconds: int = 180
+    anti_pingpong_min_flips: int = 3
+    anti_pingpong_hold_seconds: int = 300
+    anti_pingpong_min_power_watts: int = 100
+    anti_pingpong_reserve_count: int = 1
+    anti_pingpong_reserve_power_watts: int = 30
+    anti_pingpong_reserve_soc_margin_percent: int = 5
+    anti_pingpong_mode_switch_delay_seconds: int = 30
+    anti_pingpong_mode_switch_pause_seconds: int = 30
+    anti_pingpong_mode_switch_dominance_window_seconds: int = 120
+    anti_pingpong_grid_power_entity: str = ""
+    anti_pingpong_grid_power_autodiscover: bool = True
+    anti_pingpong_grid_power_import_positive: bool = True
+    anti_pingpong_smart_window_seconds: int = 300
+    anti_pingpong_smart_sample_interval_seconds: int = 1
+    anti_pingpong_smart_evaluate_interval_seconds: int = 60
+    anti_pingpong_smart_response_time_seconds: float = 3.0
+    anti_pingpong_low_power_roundtrip_efficiency: float = 0.40
+    anti_pingpong_energy_price_per_kwh: float = 0.30
+    anti_pingpong_smart_disable_bad_minutes: int = 2
+
     # Extras
     solar_power_info: bool = False
     manual_mode_repeat: bool = True
@@ -106,6 +130,12 @@ def load_config(args: dict) -> Config:
         str(args.get("ip_zendure_2", "")).strip(),
         str(args.get("ip_zendure_3", "")).strip(),
     ]
+    mode_switch_delay_seconds = int(
+        args.get(
+            "anti_pingpong_mode_switch_delay_seconds",
+            args.get("anti_pingpong_mode_switch_pause_seconds", 30),
+        )
+    )
     return Config(
         device_ips=[ip for ip in raw if ip and not is_placeholder_device_ip(ip)],
         server_port=int(args.get("server_port", 8120)),
@@ -137,6 +167,60 @@ def load_config(args: dict) -> Config:
         damper_amount=int(args.get("dualmode_damper_amount", 200)),
         always_dual_mode=_bool(args.get("always_dual_mode", False)),
         equal_mode=_bool(args.get("equal_mode", False)),
+        anti_pingpong_enable=_bool(args.get("anti_pingpong_enable", False)),
+        anti_pingpong_activation_mode=str(
+            args.get("anti_pingpong_activation_mode", "threshold")
+        ).strip().lower(),
+        anti_pingpong_window_seconds=int(
+            args.get("anti_pingpong_window_seconds", 180)
+        ),
+        anti_pingpong_min_flips=int(args.get("anti_pingpong_min_flips", 3)),
+        anti_pingpong_hold_seconds=int(args.get("anti_pingpong_hold_seconds", 300)),
+        anti_pingpong_min_power_watts=int(
+            args.get("anti_pingpong_min_power_watts", 100)
+        ),
+        anti_pingpong_reserve_count=int(args.get("anti_pingpong_reserve_count", 1)),
+        anti_pingpong_reserve_power_watts=int(
+            args.get("anti_pingpong_reserve_power_watts", 30)
+        ),
+        anti_pingpong_reserve_soc_margin_percent=int(
+            args.get("anti_pingpong_reserve_soc_margin_percent", 5)
+        ),
+        anti_pingpong_mode_switch_delay_seconds=mode_switch_delay_seconds,
+        anti_pingpong_mode_switch_pause_seconds=mode_switch_delay_seconds,
+        anti_pingpong_mode_switch_dominance_window_seconds=int(
+            args.get("anti_pingpong_mode_switch_dominance_window_seconds", 120)
+        ),
+        anti_pingpong_grid_power_entity=str(
+            args.get("anti_pingpong_grid_power_entity", "")
+        ).strip(),
+        anti_pingpong_grid_power_autodiscover=_bool(
+            args.get("anti_pingpong_grid_power_autodiscover", True)
+        ),
+        anti_pingpong_grid_power_import_positive=_bool(
+            args.get("anti_pingpong_grid_power_import_positive", True)
+        ),
+        anti_pingpong_smart_window_seconds=int(
+            args.get("anti_pingpong_smart_window_seconds", 300)
+        ),
+        anti_pingpong_smart_sample_interval_seconds=int(
+            args.get("anti_pingpong_smart_sample_interval_seconds", 1)
+        ),
+        anti_pingpong_smart_evaluate_interval_seconds=int(
+            args.get("anti_pingpong_smart_evaluate_interval_seconds", 60)
+        ),
+        anti_pingpong_smart_response_time_seconds=float(
+            args.get("anti_pingpong_smart_response_time_seconds", 3.0)
+        ),
+        anti_pingpong_low_power_roundtrip_efficiency=float(
+            args.get("anti_pingpong_low_power_roundtrip_efficiency", 0.40)
+        ),
+        anti_pingpong_energy_price_per_kwh=float(
+            args.get("anti_pingpong_energy_price_per_kwh", 0.30)
+        ),
+        anti_pingpong_smart_disable_bad_minutes=int(
+            args.get("anti_pingpong_smart_disable_bad_minutes", 2)
+        ),
         solar_power_info=_bool(args.get("solar_power_info", False)),
         manual_mode_repeat=_bool(args.get("manual_mode_repeat", True)),
         log_file_enabled=_bool(args.get("log_file_enabled", True)),

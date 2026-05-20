@@ -94,6 +94,40 @@ zendure_proxy:
   always_dual_mode: false
   equal_mode: false
 
+  # Reserve mode for short zero-on-the-meter charge/discharge oscillation.
+  # Reserve mode is the power anti-pingpong mode. The proxy keeps one Zendure
+  # ready in the opposite direction with a small reserve power. Reserve mode can
+  # reduce relay switches and react faster to short import peaks, but reserve
+  # mode uses extra energy because multiple Zendures stay awake and
+  # intentionally work against each other.
+  anti_pingpong_enable: false
+  anti_pingpong_activation_mode: "threshold"   # threshold or smart
+  anti_pingpong_window_seconds: 180
+  anti_pingpong_min_flips: 3
+  anti_pingpong_hold_seconds: 300
+  anti_pingpong_min_power_watts: 100
+  anti_pingpong_reserve_count: 1
+  anti_pingpong_reserve_power_watts: 30
+  anti_pingpong_reserve_soc_margin_percent: 5
+  anti_pingpong_mode_switch_delay_seconds: 30
+  anti_pingpong_mode_switch_dominance_window_seconds: 120
+
+  # Smart reserve mode economics.
+  # Leave anti_pingpong_grid_power_entity empty to autodiscover:
+  # 1. input_text.afwijkende_p1_sensor
+  # 2. sensor.homewizard_p1_vermogen
+  # The expected sign is +W import and -W return/export.
+  anti_pingpong_grid_power_entity: ""
+  anti_pingpong_grid_power_autodiscover: true
+  anti_pingpong_grid_power_import_positive: true
+  anti_pingpong_smart_window_seconds: 300
+  anti_pingpong_smart_sample_interval_seconds: 1
+  anti_pingpong_smart_evaluate_interval_seconds: 60
+  anti_pingpong_smart_response_time_seconds: 3
+  anti_pingpong_low_power_roundtrip_efficiency: 0.40
+  anti_pingpong_energy_price_per_kwh: 0.30
+  anti_pingpong_smart_disable_bad_minutes: 2
+
   # Solar power fields.
   solar_power_info: false
 
