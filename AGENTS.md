@@ -42,6 +42,20 @@ Current HACS install shape:
 - AppDaemon app file: `apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
 - Example config: `examples/apps.yaml`.
 
+AppDaemon must have `production_mode: true` in the global AppDaemon
+`appdaemon.yaml` file, under the top-level `appdaemon:` section:
+
+```yaml
+appdaemon:
+  production_mode: true
+```
+
+Do not put `production_mode` under `zendure_proxy:` in AppDaemon `apps.yaml`.
+HACS deletes old Python files before writing new Python files during an update.
+With `production_mode: false`, AppDaemon can reload while the files are missing.
+With `production_mode: true`, AppDaemon checks app files only on restart, so the
+user must restart AppDaemon manually after each HACS update.
+
 The installed AppDaemon folder must contain the Python modules directly:
 
 ```text
@@ -130,10 +144,13 @@ The zip must not contain `apps/`, `Zendure-zenSDK-proxy/`, `examples/`, `apps.ya
 
 Commit, push `main`, tag, push the tag, and create the GitHub release:
 
-Release notes must start with a clear reminder that users must restart AppDaemon manually after updating through HACS. Put the reminder at the very top of the release notes before `## Problem statement`, for example:
+Release notes must start with a clear reminder that users must keep AppDaemon
+`production_mode: true` and restart AppDaemon manually after updating through
+HACS. Put the reminder at the very top of the release notes before
+`## Problem statement`, for example:
 
 ```markdown
-**Important:** After updating through HACS, restart the AppDaemon add-on manually. HACS updates the files, but HACS does not restart AppDaemon.
+**Important:** Keep AppDaemon `production_mode: true` in `appdaemon.yaml`. After updating through HACS, restart the AppDaemon add-on manually. HACS updates the files, but HACS does not restart AppDaemon.
 ```
 
 ```bash
@@ -274,7 +291,9 @@ curl -i \
 
 ## AppDaemon Runtime Notes
 
-After a HACS update, tell users to restart AppDaemon. HACS updates files, but HACS does not restart the AppDaemon add-on.
+After a HACS update, tell users to keep AppDaemon `production_mode: true` and
+restart AppDaemon manually. HACS deletes old Python files before writing new
+Python files, and HACS does not restart the AppDaemon add-on.
 
 Logging:
 

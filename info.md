@@ -37,13 +37,16 @@ Metrics are also published as Home Assistant sensors by default.
 3. Enable `AppDaemon apps discovery & tracking`.
 4. Add this repository to HACS as an AppDaemon repository.
 5. Install `Zendure zenSDK Proxy` from HACS.
-6. Copy the `zendure_proxy` block from `examples/apps.yaml` into your AppDaemon `apps.yaml`.
-7. Change `ip_zendure_1`, `ip_zendure_2`, and `ip_zendure_3` in AppDaemon `apps.yaml`.
-8. Restart AppDaemon.
+6. Set `production_mode: true` under the global `appdaemon:` section in AppDaemon `appdaemon.yaml`.
+7. Copy the `zendure_proxy` block from `examples/apps.yaml` into your AppDaemon `apps.yaml`.
+8. Change `ip_zendure_1`, `ip_zendure_2`, and `ip_zendure_3` in AppDaemon `apps.yaml`.
+9. Restart AppDaemon.
 
 HACS downloads the app code to the Home Assistant configuration directory under `appdaemon/apps/Zendure-zenSDK-proxy/`.
 
 The AppDaemon module must be `zendure_proxy`, because the `ZendureProxy` class is defined in `appdaemon/apps/Zendure-zenSDK-proxy/zendure_proxy.py`.
+
+For HACS updates, keep AppDaemon `production_mode: true` in `appdaemon.yaml` and restart AppDaemon manually after every update. HACS replaces the Python files during an update, and AppDaemon should not reload the app while HACS is between deleting the old files and writing the new files.
 
 Point the Gielz `Zendure 2400 AC IP-adres` setting to the internal AppDaemon add-on address, for example:
 

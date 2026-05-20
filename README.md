@@ -137,7 +137,7 @@ bij 1600 W blijft.
 
 ## AppDaemon via HACS
 
-HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon en voeg daarna de configuratie uit `examples/apps.yaml` toe aan je AppDaemon `apps.yaml`.
+HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt geen AppDaemon installatie aan en HACS past `apps.yaml` niet automatisch aan. Installeer daarom eerst AppDaemon, zet `production_mode: true` in je AppDaemon `appdaemon.yaml`, en voeg daarna de configuratie uit `examples/apps.yaml` toe aan je AppDaemon `apps.yaml`.
 
 ### Installatie
 
@@ -148,17 +148,28 @@ HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt 
 5. Ga naar `Custom repositories`.
 6. Voeg deze GitHub repository toe als type `AppDaemon`.
 7. Installeer `Zendure zenSDK Proxy`.
-8. Open je AppDaemon `apps.yaml`.
-9. Kopieer de `zendure_proxy` configuratie uit [`examples/apps.yaml`](examples/apps.yaml) naar je AppDaemon `apps.yaml`.
-10. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
-11. Herstart AppDaemon.
-12. Vul in Gielz bij `Zendure 2400 AC IP-adres` het interne AppDaemon add-on adres in: `a0d7b954-appdaemon:8120/endpoint`.
+8. Open je AppDaemon `appdaemon.yaml`.
+9. Zet `production_mode: true` onder de bestaande globale `appdaemon:` sectie.
+10. Open je AppDaemon `apps.yaml`.
+11. Kopieer de `zendure_proxy` configuratie uit [`examples/apps.yaml`](examples/apps.yaml) naar je AppDaemon `apps.yaml`.
+12. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
+13. Herstart AppDaemon.
+14. Vul in Gielz bij `Zendure 2400 AC IP-adres` het interne AppDaemon add-on adres in: `a0d7b954-appdaemon:8120/endpoint`.
 
 HACS downloadt de AppDaemon code naar de Home Assistant configuratiemap onder `appdaemon/apps/`.
 
 Als AppDaemon als Home Assistant add-on draait, gebruik dan vanuit Home Assistant Core de interne add-on hostnaam `a0d7b954-appdaemon`. Gebruik `localhost:8120` alleen wanneer de caller in dezelfde container als AppDaemon draait.
 
-Na een HACS update van `Zendure zenSDK Proxy`: herstart AppDaemon. HACS vervangt de Python bestanden, maar HACS herstart de AppDaemon add-on niet zelf.
+Zet AppDaemon `production_mode: true` aan voordat je HACS updates gebruikt:
+
+```yaml
+appdaemon:
+  production_mode: true
+```
+
+Zet `production_mode: true` in `appdaemon.yaml`, niet in `apps.yaml` en niet onder `zendure_proxy:`. Met `production_mode: true` controleert AppDaemon Python-bestanden alleen bij een restart. Zonder `production_mode: true` kan AppDaemon tijdens een HACS update precies zien dat HACS de oude Python-bestanden al heeft verwijderd en de nieuwe Python-bestanden nog niet heeft teruggezet.
+
+Na een HACS update van `Zendure zenSDK Proxy`: herstart AppDaemon handmatig. HACS vervangt de Python bestanden, maar HACS herstart de AppDaemon add-on niet zelf.
 
 ### AppDaemon configuratie
 
@@ -695,4 +706,3 @@ krijgen. Direct van `0 W` naar de volledige opdracht springen kan onrustiger
 gedrag geven dan een korte overgang. De AppDaemon/Python implementatie gebruikt
 daarom bij drie Zendures dezelfde zachte overgang als bij twee Zendures, ook al
 slaat de Node-RED 3-Zendure code die overgang over.
-
