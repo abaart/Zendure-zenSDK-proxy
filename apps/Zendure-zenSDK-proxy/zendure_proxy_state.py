@@ -93,6 +93,7 @@ class ProxyState:
     counter_missing: list[int] = field(default_factory=lambda: [0, 0, 0])
     startup_ts: float = 0.0
     last_ha_get_ts: float = 0.0
+    last_upstream_get_ts: float = 0.0
     get_refresh_in_progress: bool = False
     latest_get_ts: float = 0.0
     latest_power_message_ts: float = 0.0

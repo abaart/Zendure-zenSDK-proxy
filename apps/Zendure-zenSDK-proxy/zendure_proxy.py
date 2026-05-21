@@ -665,11 +665,11 @@ class ZendureProxy(hass.Hass):
                 self._state.counter_config_drop += 1
                 return {"error": "No devices configured"}, status
 
-            previous_ha_get_ts = self._state.last_ha_get_ts
             self._state.last_ha_get_ts = request_ts
             if (
-                previous_ha_get_ts > 0
-                and request_ts - previous_ha_get_ts <= self._cfg.get_rate_limit_window
+                self._state.last_upstream_get_ts > 0
+                and request_ts - self._state.last_upstream_get_ts
+                <= self._cfg.get_rate_limit_window
                 and cache_is_usable(self._state, self._cfg, current_ts=request_ts)
             ):
                 status = 200
@@ -865,6 +865,7 @@ class ZendureProxy(hass.Hass):
                     gets = [fut for fut in gets if not fut.done()]
                     try:
                         self._state.get_refresh_in_progress = True
+                        self._state.last_upstream_get_ts = now()
                         get_response = await execute_get(
                             self._clients, self._state, self._cfg, self._proxy_log
                         )

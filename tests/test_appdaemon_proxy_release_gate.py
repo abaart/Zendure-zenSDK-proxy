@@ -92,6 +92,7 @@ from zendure_proxy_health import (  # noqa: E402
 from zendure_proxy_metrics import MetricsRegistry  # noqa: E402
 from zendure_proxy_mqtt_discovery import mqtt_sensor_config  # noqa: E402
 from zendure_proxy_post_handler import execute_post  # noqa: E402
+from zendure_proxy_power import now  # noqa: E402
 from zendure_proxy_state import DeviceState, ProxyState  # noqa: E402
 
 
@@ -209,6 +210,90 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["proxyHealth"]["reason"], "ha_get_timeout")
         self.assertTrue(data["proxyHealth"]["servedFromCache"])
 
+    async def test_report_rate_limit_uses_last_upstream_get_timestamp(self) -> None:
+        current_ts = now()
+        response = {
+            "proxyHealth": {"servedFromCache": False, "reason": "fresh"},
+            "packData": [],
+            "properties": {"sn_1": "SN1", "ipAddress_1": "ip1"},
+        }
+        queue = _ImmediateGetQueue(response)
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(
+            device_ips=["ip1"],
+            ha_get_response_timeout=0.1,
+            get_cache_max_age=300.0,
+            get_rate_limit_window=1.0,
+        )
+        proxy._state = ProxyState(
+            device_count=1,
+            devices=[DeviceState(ip="ip1", sn="SN1")],
+            startup_ts=current_ts - 10.0,
+            last_ha_get_ts=current_ts,
+            last_upstream_get_ts=current_ts - 2.0,
+            latest_get_ts=current_ts,
+            last_get_response={
+                "proxyVersion": "test",
+                "packData": [],
+                "properties": {"sn_1": "SN1", "ipAddress_1": "ip1"},
+            },
+        )
+        proxy._queue = queue
+        proxy._metrics = _FakeMetrics()
+        proxy._publish_proxy_ha_sensors = _noop_publish
+        proxy._record_incoming_depths = _noop_record_depths
+        proxy._debug_capture_payload = lambda *args, **kwargs: None
+        proxy._standby_check = _noop_record_depths
+        proxy._mark_passive_zero_timestamps = lambda: None
+
+        data, status = await proxy._execute_report_request()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(queue.enqueue_get_calls, 1)
+        self.assertNotEqual(data["proxyHealth"]["reason"], "rate_limited")
+
+    async def test_report_rate_limit_returns_cache_for_recent_upstream_get(self) -> None:
+        current_ts = now()
+        queue = _ImmediateGetQueue(
+            {
+                "proxyHealth": {"servedFromCache": False, "reason": "fresh"},
+                "packData": [],
+                "properties": {"sn_1": "SN1", "ipAddress_1": "ip1"},
+            }
+        )
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(
+            device_ips=["ip1"],
+            ha_get_response_timeout=0.1,
+            get_cache_max_age=300.0,
+            get_rate_limit_window=1.0,
+        )
+        proxy._state = ProxyState(
+            device_count=1,
+            devices=[DeviceState(ip="ip1", sn="SN1")],
+            startup_ts=current_ts - 10.0,
+            last_ha_get_ts=0.0,
+            last_upstream_get_ts=current_ts,
+            latest_get_ts=current_ts,
+            last_get_response={
+                "proxyVersion": "test",
+                "packData": [],
+                "properties": {"sn_1": "SN1", "ipAddress_1": "ip1"},
+            },
+        )
+        proxy._queue = queue
+        proxy._metrics = _FakeMetrics()
+        proxy._publish_proxy_ha_sensors = _noop_publish
+        proxy._record_incoming_depths = _noop_record_depths
+        proxy._debug_capture_payload = lambda *args, **kwargs: None
+
+        data, status = await proxy._execute_report_request()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(queue.enqueue_get_calls, 0)
+        self.assertEqual(data["proxyHealth"]["reason"], "rate_limited")
+        self.assertTrue(data["proxyHealth"]["servedFromCache"])
+
     async def test_processor_updates_cache_and_answers_pending_gets(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
         proxy._cfg = Config(device_ips=["ip1"], get_cache_max_age=300.0)
@@ -240,6 +325,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first_data["properties"]["sn_1"], "SN1")
         self.assertEqual(second_data["properties"]["sn_1"], "SN1")
+        self.assertGreater(proxy._state.last_upstream_get_ts, 0)
         self.assertEqual(proxy._state.last_get_response["properties"]["sn_1"], "SN1")
 
 
@@ -785,6 +871,21 @@ class _NeverResolvingQueue:
 
     async def depths(self):
         return 1, 0
+
+
+class _ImmediateGetQueue:
+    def __init__(self, response: dict):
+        self.response = response
+        self.enqueue_get_calls = 0
+
+    async def enqueue_get(self):
+        self.enqueue_get_calls += 1
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(self.response)
+        return future
+
+    async def depths(self):
+        return 0, 0
 
 
 class _FakeMetrics:
