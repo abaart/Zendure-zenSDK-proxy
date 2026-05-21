@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 
 APP_DIR = Path(__file__).resolve().parents[1] / "apps" / "Zendure-zenSDK-proxy"
@@ -88,6 +89,7 @@ from zendure_proxy_health import (  # noqa: E402
     eligible_device_indices,
     health_summary,
     record_get_results,
+    response_with_proxy_health,
 )
 from zendure_proxy_metrics import MetricsRegistry  # noqa: E402
 from zendure_proxy_mqtt_discovery import mqtt_sensor_config  # noqa: E402
@@ -293,6 +295,51 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue.enqueue_get_calls, 0)
         self.assertEqual(data["proxyHealth"]["reason"], "rate_limited")
         self.assertTrue(data["proxyHealth"]["servedFromCache"])
+
+    async def test_rapid_report_requests_use_one_upstream_get_per_window(self) -> None:
+        clock = _FakeClock(base=1000.0, step=0.1)
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(
+            device_ips=["ip1"],
+            ha_get_response_timeout=0.1,
+            get_cache_max_age=300.0,
+            get_rate_limit_window=1.0,
+        )
+        proxy._state = ProxyState(
+            device_count=1,
+            devices=[DeviceState(ip="ip1", sn="SN1")],
+            startup_ts=clock.now() - 10.0,
+        )
+        queue = _ClockedGetQueue(proxy._state, proxy._cfg, clock)
+        proxy._queue = queue
+        proxy._metrics = _FakeMetrics()
+        proxy._publish_proxy_ha_sensors = _noop_publish
+        proxy._record_incoming_depths = _noop_record_depths
+        proxy._debug_capture_payload = lambda *args, **kwargs: None
+        proxy._standby_check = _noop_record_depths
+        proxy._mark_passive_zero_timestamps = lambda: None
+
+        responses = []
+        with patch("zendure_proxy.now", clock.now):
+            for tick in range(25):
+                clock.tick = tick
+                data, status = await proxy._execute_report_request()
+
+                self.assertEqual(status, 200)
+                responses.append(data)
+
+        reasons = [data["proxyHealth"]["reason"] for data in responses]
+        fresh_indices = [
+            idx for idx, reason in enumerate(reasons) if reason == "fresh"
+        ]
+
+        self.assertEqual(queue.enqueue_get_calls, 3)
+        self.assertEqual(fresh_indices, [0, 11, 22])
+        self.assertEqual(reasons.count("rate_limited"), 22)
+        self.assertEqual(responses[10]["properties"]["freshCounter"], 1)
+        self.assertEqual(responses[11]["properties"]["freshCounter"], 2)
+        self.assertEqual(responses[21]["properties"]["freshCounter"], 2)
+        self.assertEqual(responses[22]["properties"]["freshCounter"], 3)
 
     async def test_processor_updates_cache_and_answers_pending_gets(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
@@ -882,6 +929,55 @@ class _ImmediateGetQueue:
         self.enqueue_get_calls += 1
         future = asyncio.get_running_loop().create_future()
         future.set_result(self.response)
+        return future
+
+    async def depths(self):
+        return 0, 0
+
+
+class _FakeClock:
+    def __init__(self, *, base: float, step: float):
+        self.base = base
+        self.step = step
+        self.tick = 0
+
+    def now(self) -> float:
+        return self.base + self.tick * self.step
+
+
+class _ClockedGetQueue:
+    def __init__(self, state: ProxyState, cfg: Config, clock: _FakeClock):
+        self.state = state
+        self.cfg = cfg
+        self.clock = clock
+        self.enqueue_get_calls = 0
+
+    async def enqueue_get(self):
+        self.enqueue_get_calls += 1
+        current_ts = self.clock.now()
+        self.state.last_upstream_get_ts = current_ts
+        self.state.latest_get_ts = current_ts
+        response = {
+            "proxyVersion": "test",
+            "packData": [],
+            "properties": {
+                "sn_1": "SN1",
+                "ipAddress_1": "ip1",
+                "freshCounter": self.enqueue_get_calls,
+            },
+        }
+        data = response_with_proxy_health(
+            response,
+            self.state,
+            self.cfg,
+            served_from_cache=False,
+            reason="fresh",
+            refresh_in_progress=False,
+            current_ts=current_ts,
+        )
+        self.state.last_get_response = data
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(data)
         return future
 
     async def depths(self):
