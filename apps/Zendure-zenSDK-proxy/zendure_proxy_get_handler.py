@@ -22,10 +22,6 @@ from zendure_proxy_power import PROXY_VERSION, epoch, now
 from zendure_proxy_state import ProxyState
 
 
-class GatewayTimeoutError(RuntimeError):
-    """Raised when strict Node-RED GET compatibility must return HTTP 504."""
-
-
 async def execute_get(
     clients: list[DeviceClient],
     state: ProxyState,

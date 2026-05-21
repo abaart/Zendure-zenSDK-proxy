@@ -6,7 +6,7 @@ import contextlib
 from zendure_proxy import ZendureProxy, should_repeat_last_power
 from zendure_proxy_config import Config, is_placeholder_device_ip, load_config
 from zendure_proxy_device_client import DeviceClient, build_device_url
-from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
+from zendure_proxy_get_handler import execute_get
 from zendure_proxy_post_handler import execute_post
 from zendure_proxy_power import now
 from zendure_proxy_standby import _delayed_standby, manage_standby
@@ -384,7 +384,7 @@ def test_report_request_retries_missing_serials_before_returning_503() -> None:
     assert client.get_calls == 0
 
 
-def test_execute_get_returns_partial_response_when_strict_compat_is_enabled() -> None:
+def test_execute_get_returns_partial_response_when_one_device_is_missing() -> None:
     state = ProxyState(
         device_count=2,
         devices=[
@@ -401,7 +401,6 @@ def test_execute_get_returns_partial_response_when_strict_compat_is_enabled() ->
             state,
             Config(
                 device_ips=["ip1", "ip2"],
-                node_red_compat_strict_get_errors=True,
             ),
             lambda *args, **kwargs: None,
         )
@@ -436,37 +435,13 @@ def test_successful_get_updates_latest_get_timestamp_only_after_device_replies()
         execute_get(
             clients,
             state,
-            Config(device_ips=["ip1"], node_red_compat_strict_get_errors=True),
+            Config(device_ips=["ip1"]),
             lambda *args, **kwargs: None,
         )
     )
 
     assert state.latest_get_ts == previous_ts
     assert response["proxyHealth"]["servedFromCache"] is True
-
-
-def test_report_request_returns_gateway_timeout_for_strict_get_error() -> None:
-    proxy = ZendureProxy.__new__(ZendureProxy)
-    proxy._cfg = Config(
-        device_ips=["ip1"],
-        node_red_compat_strict_get_errors=True,
-    )
-    proxy._clients = [FakeDeviceClient(device_response(1, "SN1"))]
-    proxy._state = ProxyState(
-        device_count=1,
-        devices=[DeviceState(ip="ip1", sn="SN1")],
-    )
-    proxy._metrics = _FakeMetrics()
-    proxy._queue = _GatewayTimeoutQueue()
-    proxy._proxy_log = lambda *args, **kwargs: None
-    proxy._publish_proxy_ha_sensors = _noop_publish
-    proxy._record_incoming_depths = _noop_record_depths
-    proxy._debug_capture_payload = lambda *args, **kwargs: None
-
-    data, status = asyncio.run(proxy._execute_report_request())
-
-    assert status == 504
-    assert data == {"error": "Cached GET response expired"}
 
 
 def test_simulated_device_urls_and_placeholder_ips_are_compatible_with_node_red() -> None:
@@ -679,13 +654,6 @@ async def _noop_publish(_response: dict) -> None:
 
 async def _noop_record_depths() -> None:
     return None
-
-
-class _GatewayTimeoutQueue:
-    async def enqueue_get(self):
-        future = asyncio.get_event_loop().create_future()
-        future.set_exception(GatewayTimeoutError("Gateway Timeout"))
-        return future
 
 
 class _NeverResolvingQueue:

@@ -181,11 +181,6 @@ zendure_proxy:
   proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
   proxy_ha_sensors_mqtt_retain: true
 
-  # Node-RED compatibility additions.
-  # true returns HTTP 504 {"error":"Gateway Timeout"} when a required device
-  # has no fresh GET reply, matching the visible Node-RED timeout behavior.
-  node_red_compat_strict_get_errors: true
-
   # Debug payload capture.
   # false keeps full GET/POST payloads out of the rotating logfile.
   debug_payload_capture_enabled: false

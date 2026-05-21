@@ -110,8 +110,6 @@ class Config:
     proxy_ha_sensors_mqtt_state_prefix: str = "zendure_proxy"
     proxy_ha_sensors_mqtt_retain: bool = True
 
-    # Node-RED compatibility additions
-    node_red_compat_strict_get_errors: bool = True
     debug_payload_capture_enabled: bool = False
     diagnostics_dashboard_enabled: bool = True
     diagnostics_dashboard_route: str = "zendure_proxy_diagnostics"
@@ -261,9 +259,6 @@ def load_config(args: dict) -> Config:
         ).strip(),
         proxy_ha_sensors_mqtt_retain=_bool(
             args.get("proxy_ha_sensors_mqtt_retain", True)
-        ),
-        node_red_compat_strict_get_errors=_bool(
-            args.get("node_red_compat_strict_get_errors", True)
         ),
         debug_payload_capture_enabled=_bool(
             args.get("debug_payload_capture_enabled", False)

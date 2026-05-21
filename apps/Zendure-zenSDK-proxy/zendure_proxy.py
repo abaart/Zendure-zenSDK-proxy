@@ -28,7 +28,7 @@ import appdaemon.plugins.hass.hassapi as hass
 
 from zendure_proxy_config import Config, load_config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_get_handler import GatewayTimeoutError, execute_get
+from zendure_proxy_get_handler import execute_get
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors
 from zendure_proxy_anti_pingpong import (
     activation_mode,
@@ -889,24 +889,6 @@ class ZendureProxy(hass.Hass):
                     return data, status
                 status = 504
                 return {"error": "Cached GET response expired"}, status
-            except GatewayTimeoutError:
-                timeout = True
-                self._state.counter_get_timeouts += 1
-                if cache_is_usable(self._state, self._cfg, current_ts=now()):
-                    status = 200
-                    data = response_with_proxy_health(
-                        self._state.last_get_response or {},
-                        self._state,
-                        self._cfg,
-                        served_from_cache=True,
-                        reason="upstream_partial",
-                        refresh_in_progress=self._state.get_refresh_in_progress,
-                        current_ts=now(),
-                    )
-                    await self._publish_proxy_ha_sensors(data)
-                    return data, status
-                status = 504
-                return {"error": "Cached GET response expired"}, status
             except Exception as exc:
                 self._proxy_log(f"GET handler error: {exc}", level="ERROR")
                 if cache_is_usable(self._state, self._cfg, current_ts=now()):
@@ -1062,10 +1044,7 @@ class ZendureProxy(hass.Hass):
                         cached = self._state.last_get_response
                         for fut in gets:
                             if not fut.done():
-                                if (
-                                    cached
-                                    and not isinstance(exc, GatewayTimeoutError)
-                                ):
+                                if cached:
                                     fut.set_result(
                                         response_with_proxy_health(
                                             cached,
