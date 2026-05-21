@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zendure_proxy_state import ProxyState
 
-PROXY_VERSION = "v0.1.17"
+PROXY_VERSION = "v0.1.18"
 
 
 def now() -> float:

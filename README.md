@@ -114,6 +114,12 @@ In gewone taal:
   bruikbare response oplevert. Voorbeelden zijn: geen antwoord binnen
   `zendure_request_timeout`, standaard 60 seconden, een verbroken verbinding,
   een HTTP fout, of een response die de proxy niet kan verwerken.
+- Wanneer `proxyHealth.degradedDevices` een nieuw slot meldt, publiceert
+  `ZendureProxy._publish_degraded_transition_sensors(...)` direct
+  `sensor.proxy_zendure_pool_healthy`, `sensor.zendure_actief_device`,
+  `sensor.vermogensopdracht`, en de `sensor.zendure_N_*` sensors voor dat
+  slot. Home Assistant ziet de zichtbare degraded-status zonder te wachten op
+  de volgende REST sensorupdate.
 - Een `Degraded` Zendure krijgt geen POST opdrachten meer. `execute_post(...)`
   verdeelt de volledige vermogensopdracht van Home Assistant over de gezonde
   Zendures. Bij P1-sturing zit het werkelijke laad- of ontlaadvermogen van een

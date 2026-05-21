@@ -144,6 +144,101 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             written_states["sensor.zendure_proxy_versie"][1]["zendure_proxy_managed"]
         )
 
+    async def test_degraded_transition_updates_existing_health_sensors(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = types.SimpleNamespace(
+            proxy_ha_sensors_enabled=True,
+            proxy_ha_sensors_skip_existing=True,
+            proxy_ha_sensors_mqtt_discovery_enabled=False,
+        )
+        proxy._mqtt_api = None
+        proxy._mqtt_sensor_error_logged = False
+        proxy._proxy_ha_sensor_owned_entities = set()
+        proxy._proxy_ha_degraded_slots = frozenset()
+        written_states: dict[str, tuple[str, dict]] = {}
+        log_lines: list[tuple[str, str]] = []
+
+        def get_state(entity_id: str, attribute=None):
+            if entity_id == "input_text.zendure_2400_ac_batterij_volgorde":
+                return None
+            return {
+                "state": "old",
+                "attributes": {"friendly_name": "Existing REST sensor"},
+            }
+
+        def set_state(entity_id: str, state, attributes, replace, check_existence):
+            written_states[entity_id] = (state, attributes)
+            return None
+
+        proxy.get_state = get_state
+        proxy.set_state = set_state
+        proxy._proxy_log = lambda message, level="INFO", **_kwargs: log_lines.append(
+            (message, level)
+        )
+        health_item = {
+            "slot": 2,
+            "serialNumber": "SN2",
+            "ipAddress": "ip2",
+            "lastSuccessfulGetAgeSeconds": 301.0,
+            "lastGetError": "GET returned no response",
+            "recoverySecondsRemaining": 0.0,
+        }
+        response = {
+            "proxyVersion": "test",
+            "packData": [],
+            "properties": {
+                "sn_1": "SN1",
+                "sn_2": "SN2",
+                "ipAddress_1": "ip1",
+                "ipAddress_2": "ip2",
+                "electricLevel_2": "unavailable",
+                "latestPowerCmd_2": "unavailable",
+            },
+            "proxyHealth": {
+                "configuredCount": 2,
+                "healthyCount": 1,
+                "unhealthyCount": 1,
+                "excludedCount": 1,
+                "recoveringCount": 0,
+                "degradedCount": 1,
+                "deadCount": 0,
+                "unhealthyDevices": [health_item],
+                "excludedDevices": [health_item],
+                "recoveringDevices": [],
+                "degradedDevices": [health_item],
+                "deadDevices": [],
+            },
+        }
+
+        await proxy._publish_degraded_transition_sensors(response)
+
+        self.assertEqual(
+            written_states["sensor.proxy_zendure_pool_healthy"][0],
+            "Degraded",
+        )
+        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Degraded")
+        self.assertEqual(
+            written_states["sensor.zendure_2_laadpercentage"][0],
+            "unavailable",
+        )
+        self.assertNotIn("sensor.zendure_1_health", written_states)
+        self.assertNotIn(
+            "zendure_proxy_managed",
+            written_states["sensor.proxy_zendure_pool_healthy"][1],
+        )
+        self.assertEqual(proxy._proxy_ha_sensor_owned_entities, set())
+        self.assertEqual(len(log_lines), 1)
+        self.assertEqual(log_lines[0][1], "WARNING")
+        self.assertIn("Zendure pool degraded: slot=2", log_lines[0][0])
+        self.assertIn("serial=SN2", log_lines[0][0])
+        self.assertIn("last_get_error=GET returned no response", log_lines[0][0])
+
+        written_states.clear()
+        await proxy._publish_degraded_transition_sensors(response)
+
+        self.assertEqual(written_states, {})
+        self.assertEqual(len(log_lines), 1)
+
     async def test_publish_proxy_mqtt_sensor_accepts_async_mqtt_publish(self) -> None:
         published: list[tuple[str, str, bool]] = []
 
