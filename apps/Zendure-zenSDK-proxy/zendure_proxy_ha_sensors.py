@@ -289,6 +289,42 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         icon="mdi:currency-eur",
     )
     add(
+        "sensor.relay_saver_status",
+        _on_off(props.get("relaySaverActive", 0)),
+        "Relay Saver Status",
+        icon="mdi:electric-switch",
+    )
+    add(
+        "sensor.relay_saver_vertraagd_device",
+        _active_device(props.get("relaySaverDelayedDevice", 0)),
+        "Relay Saver Vertraagd Device",
+        icon="mdi:timer-pause",
+    )
+    add(
+        "sensor.relay_saver_minimumvermogen",
+        props.get("relaySaverMinPower", 0),
+        "Relay Saver Minimumvermogen",
+        unit_of_measurement="W",
+        state_class="measurement",
+        device_class="power",
+    )
+    add(
+        "sensor.relay_saver_drempel",
+        props.get("relaySaverMinDropWatts", 0),
+        "Relay Saver Drempel",
+        unit_of_measurement="W",
+        state_class="measurement",
+        device_class="power",
+    )
+    add(
+        "sensor.relay_saver_resterende_seconden",
+        props.get("relaySaverRemainingSeconds", 0),
+        "Relay Saver Resterende Seconden",
+        unit_of_measurement="s",
+        state_class="measurement",
+        icon="mdi:timer-sand",
+    )
+    add(
         "sensor.dual_mode_demper_status",
         _on_off(props.get("dualModeDamper", 1 if props.get("dualModeDamper") else 0)),
         "Dual Mode Demper Status",

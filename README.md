@@ -247,6 +247,11 @@ zendure_proxy:
   anti_pingpong_energy_price_per_kwh: 0.30
   anti_pingpong_smart_disable_bad_minutes: 2
 
+  relay_saver_enable: false
+  relay_saver_min_drop_watts: 900
+  relay_saver_min_power_watts: 30
+  relay_saver_hold_seconds: 30
+
   solar_power_info: false
   manual_mode_repeat: true
 
@@ -322,6 +327,43 @@ Voor slimme bespaarstand gebruikt de proxy een P1/CT vermogenssensor met positie
 Laat `anti_pingpong_grid_power_entity: ""` staan wanneer de proxy de bestaande Gielz/HomeWizard configuratie moet hergebruiken. Vul `anti_pingpong_grid_power_entity` alleen wanneer de proxy een andere sensor moet gebruiken.
 
 Veiligheidsadvies: sluit bij voorkeur nooit meer dan één Zendure aan op dezelfde groep, zekering, of automaat. Laat de elektrische installatie beoordelen door een vakbekwame installateur wanneer meerdere Zendures in één woning actief laden en ontladen. De proxy kan niet controleren op welke groep, zekering, of automaat een Zendure is aangesloten.
+
+### Relay saver mode
+
+Relay saver mode is bedoeld voor grote plotselinge vermogensdalingen naar 0 W.
+Zonder relay saver mode kan een Zendure kort naar 0 W gaan, de relay laten
+afvallen, en kort daarna weer moeten opschalen wanneer de piek in huisverbruik
+verdwijnt. Met `relay_saver_enable: true` houdt de proxy de vorige richting nog
+kort vast met een klein minimumvermogen.
+
+De standaardwaarden zijn:
+
+```yaml
+relay_saver_enable: false
+relay_saver_min_drop_watts: 900
+relay_saver_min_power_watts: 30
+relay_saver_hold_seconds: 30
+```
+
+Wanneer een device bijvoorbeeld van 1000 W laden naar 0 W zou gaan, stuurt
+`zendure_proxy_post_handler.execute_post(...)` eerst 30 seconden lang 30 W laden
+naar dat device. Wanneer Home Assistant binnen die 30 seconden weer een duidelijke
+laadopdracht stuurt, stopt de proxy de relay saver hold en stuurt de proxy de
+nieuwe laadopdracht direct door. Wanneer de 30 seconden voorbij zijn en Home
+Assistant nog steeds 0 W of de andere richting vraagt, stuurt de proxy de 0 W of
+richtingwissel alsnog door.
+
+Relay saver mode heeft voordelen en nadelen. Het voordeel is dat korte pieken
+minder vaak een volledige aan/uit-wissel veroorzaken. Daardoor kan de Zendure
+sneller weer opschalen wanneer de piek verdwijnt. Het nadeel is dat de Zendure
+30 seconden langer een klein laad- of ontlaadvermogen kan gebruiken dan Home
+Assistant vroeg. Het extra minimumvermogen kost een beetje energie.
+
+Reserve mode heeft voorrang. `anti_pingpong_*` payloads worden eerst bepaald.
+Relay saver mode verandert alleen devices waarvoor reserve mode geen eigen
+payload heeft gekozen. Door die volgorde blijven `anti_pingpong_enable`,
+`anti_pingpong_activation_mode`, en de bestaande mode-switch delay de eerste
+beslissers voor laden/ontladen-wissels.
 
 De proxy luistert daarna op de legacy HTTP URLs:
 
@@ -526,13 +568,16 @@ Het metrics dashboard toont:
 - aantal GET requests dat door coalescing is bespaard;
 - aantal POST requests dat door deduplicatie is overgeslagen;
 - per Zendure device de uitgaande GET/POST totalen;
+- per Zendure device het aantal gemeten relay wisselingen;
 - per Zendure device de uitgaande GET/POST error rates over de laatste 5 minuten;
 - per Zendure device de uitgaande GET/POST gemiddelde latency, p95 latency en max latency;
 - per Zendure device de uitgaande queue depth.
 
 De proxy publiceert standaard ook Home Assistant metrics via AppDaemon `set_state()`. De metrics worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
 
-`ZendureProxy._publish_metrics_sensors()` publiceert de queue, latency en error metrics. `ZendureProxy._restore_metrics_counters_from_ha()` leest counter sensor states uit Home Assistant bij het starten van AppDaemon. Daardoor tellen `sensor.zendure_proxy_incoming_get_total`, `sensor.zendure_proxy_queue_get_coalesced_total`, en de andere `*_total` counters verder vanaf de laatste Home Assistant state na een AppDaemon restart.
+`ZendureProxy._publish_metrics_sensors()` publiceert de queue, latency, error, en relay metrics. `ZendureProxy._restore_metrics_counters_from_ha()` leest counter sensor states uit Home Assistant bij het starten van AppDaemon. Daardoor tellen `sensor.zendure_proxy_incoming_get_total`, `sensor.zendure_proxy_queue_get_coalesced_total`, `sensor.zendure_proxy_device_1_relay_switches_total`, en de andere `*_total` counters verder vanaf de laatste Home Assistant state na een AppDaemon restart.
+
+De relay switch counters gebruiken verse GET metingen per fysieke Zendure. De proxy kijkt naar `outputPackPower` en `packInputPower` uit de device response. Een overgang van gemeten 0 W naar gemeten meer dan 0 W telt als één relay wisseling. Een overgang van gemeten meer dan 0 W naar gemeten 0 W telt ook als één relay wisseling. Een ontbrekende GET response telt niet als 0 W, omdat een ontbrekende GET response geen gemeten relay stand is.
 
 `MetricsRegistry.flat_ha_sensors()` zet `state_class: total_increasing` alleen op counter sensors. Gewone meetwaarden zoals p95 latency, queue depth en error rate krijgen geen `state_class: total_increasing`.
 
@@ -555,6 +600,7 @@ sensor.zendure_proxy_device_1_queue_depth
 sensor.zendure_proxy_device_1_get_p95_ms
 sensor.zendure_proxy_device_1_post_p95_ms
 sensor.zendure_proxy_device_1_error_rate
+sensor.zendure_proxy_device_1_relay_switches_total
 ```
 
 Voor een 2- of 3-device setup worden ook `device_2` en `device_3` sensors aangemaakt.
@@ -583,6 +629,11 @@ sensor.anti_pingpong_status
 sensor.anti_pingpong_reserve_device
 sensor.anti_pingpong_p1_sensor
 sensor.anti_pingpong_smart_netto_euro
+sensor.relay_saver_status
+sensor.relay_saver_vertraagd_device
+sensor.relay_saver_minimumvermogen
+sensor.relay_saver_drempel
+sensor.relay_saver_resterende_seconden
 sensor.zendure_proxy_versie
 ```
 

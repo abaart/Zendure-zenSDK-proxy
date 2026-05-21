@@ -6,6 +6,7 @@ from zendure_proxy_config import Config
 from zendure_proxy_anti_pingpong import smart_evaluate_window, smart_sample_grid_power
 from zendure_proxy_post_handler import execute_post
 from zendure_proxy_power import distribute_power, now
+from zendure_proxy_standby import manage_standby
 from zendure_proxy_state import DeviceState, ProxyState
 
 from conftest import FakeDeviceClient
@@ -530,6 +531,272 @@ def test_anti_pingpong_off_delay_keeps_weighted_discharge_direction() -> None:
     assert state.latest_power_cmd == 500
     assert state.devices[0].latest_power_cmd == -30
     assert state.anti_pingpong_last_reason == "dominant_discharge_delay"
+
+
+def test_relay_saver_disabled_by_default_sends_zero_power() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            Config(device_ips=["ip1"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 0,
+    }
+    assert state.relay_saver_paused_idx == []
+
+
+def test_relay_saver_holds_previous_charge_before_zero_power() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            Config(device_ips=["ip1"], relay_saver_enable=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 30,
+        "outputLimit": 0,
+    }
+    assert state.devices[0].latest_power_cmd == 30
+    assert state.relay_saver_paused_idx == [0]
+    assert state.relay_saver_last_reason == "large_drop_to_zero"
+
+
+def test_relay_saver_min_drop_threshold_skips_smaller_drop() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 800
+    clients = [FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            Config(device_ips=["ip1"], relay_saver_enable=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 0,
+    }
+    assert state.relay_saver_paused_idx == []
+
+
+def test_relay_saver_repeated_zero_post_does_not_reset_hold() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+    cfg = Config(device_ips=["ip1"], relay_saver_enable=True)
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    first_until = state.relay_saver_until_ts_by_idx[0]
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.relay_saver_until_ts_by_idx[0] == first_until
+    assert clients[0].post_payloads[-1]["properties"]["inputLimit"] == 30
+
+
+def test_relay_saver_clears_hold_for_same_direction_power() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+    cfg = Config(device_ips=["ip1"], relay_saver_enable=True)
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.relay_saver_paused_idx == []
+    assert state.relay_saver_until_ts_by_idx == {}
+    assert clients[0].post_payloads[-1]["properties"]["inputLimit"] == 500
+
+
+def test_relay_saver_allows_zero_after_hold_expires() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+    cfg = Config(device_ips=["ip1"], relay_saver_enable=True)
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    state.relay_saver_until_ts_by_idx[0] = now() - 1
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.relay_saver_paused_idx == []
+    assert clients[0].post_payloads[-1]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 0,
+    }
+
+
+def test_relay_saver_allows_opposite_direction_after_hold_expires() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+    cfg = Config(device_ips=["ip1"], relay_saver_enable=True)
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 800}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+    state.relay_saver_until_ts_by_idx[0] = now() - 1
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 800}},
+            clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.relay_saver_paused_idx == []
+    assert clients[0].post_payloads[-1]["properties"] == {
+        "acMode": 2,
+        "outputLimit": 800,
+    }
+
+
+def test_relay_saver_does_not_replace_anti_pingpong_payload() -> None:
+    state = _state(2)
+    state.anti_pingpong_active = True
+    state.devices[0].electric_level = 40
+    state.devices[1].electric_level = 80
+    state.devices[0].latest_power_cmd = 1000
+    state.devices[1].latest_power_cmd = 1000
+    state.devices[0].latest_ac_mode_cmd = 1
+    state.devices[1].latest_ac_mode_cmd = 2
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                anti_pingpong_enable=True,
+                anti_pingpong_activation_mode="smart",
+                relay_saver_enable=True,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 530,
+        "outputLimit": 0,
+    }
+    assert clients[1].post_payloads[0]["properties"] == {
+        "acMode": 2,
+        "inputLimit": 0,
+        "outputLimit": 30,
+    }
+    assert state.relay_saver_paused_idx == []
+
+
+def test_relay_saver_paused_device_is_protected_from_standby() -> None:
+    state = _state(2)
+    state.ac_mode = 1
+    state.latest_power_cmd = 500
+    state.device_active_count = 1
+    state.devices_active_idx = [0]
+    state.devices[1].latest_power_cmd_zero_ts = now() - 1000
+    state.relay_saver_paused_idx = [1]
+    state.relay_saver_until_ts_by_idx = {1: now() + 30}
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        manage_standby(
+            state,
+            clients,
+            1,
+            [500, 0],
+            Config(device_ips=["ip1", "ip2"], standby_timer=1),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.devices[1].standby_task is None
 
 
 def test_anti_pingpong_smart_window_compares_gain_and_loss() -> None:

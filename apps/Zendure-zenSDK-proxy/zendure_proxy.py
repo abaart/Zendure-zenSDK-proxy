@@ -1038,7 +1038,11 @@ class ZendureProxy(hass.Hass):
                         self._state.get_refresh_in_progress = True
                         self._state.last_upstream_get_ts = now()
                         get_response = await execute_get(
-                            self._clients, self._state, self._cfg, self._proxy_log
+                            self._clients,
+                            self._state,
+                            self._cfg,
+                            self._proxy_log,
+                            metrics=self._metrics,
                         )
                         self._state.get_refresh_in_progress = False
                         self._mark_passive_zero_timestamps()

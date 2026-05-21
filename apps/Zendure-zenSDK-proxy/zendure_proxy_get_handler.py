@@ -31,6 +31,7 @@ async def execute_get(
     state: ProxyState,
     cfg: Config,
     logger: Callable,
+    metrics=None,
 ) -> dict:
     """
     Query /properties/report on every device in parallel (each serialised by
@@ -42,6 +43,7 @@ async def execute_get(
     results: list[Optional[dict]] = await asyncio.gather(*[c.get() for c in clients])
     response_ts = now()
     record_get_results(state, cfg, results, current_ts=response_ts)
+    _record_relay_measurements(results, metrics)
 
     for i, result in enumerate(results):
         if result is None and i < len(state.counter_missing):
@@ -96,6 +98,22 @@ def _update_device_state(idx: int, data: dict, state: ProxyState) -> None:
         dev.latest_ac_mode_cmd = ac_mode
     if data.get("sn"):
         dev.sn = data["sn"]
+
+
+def _record_relay_measurements(results: list[Optional[dict]], metrics) -> None:
+    recorder = getattr(metrics, "record_device_relay_measurement", None)
+    if recorder is None:
+        return
+    for idx, data in enumerate(results):
+        if data is None:
+            continue
+        props = data.get("properties", {})
+        active = (
+            _int(props.get("outputPackPower", 0)) > 0
+            or _int(props.get("packInputPower", 0)) > 0
+        )
+        recorder(idx, active)
+
 
 def _recalculate_aggregate_device_limits(
     state: ProxyState,
@@ -483,6 +501,15 @@ def build_combined_response(
         state.anti_pingpong_smart_net_eur, 6
     )
     props["antiPingpongReason"] = state.anti_pingpong_last_reason
+    relay_saver_remaining = _relay_saver_remaining_seconds(state, cfg, current_ts)
+    props["relaySaver"] = 1 if cfg.relay_saver_enable else 0
+    props["relaySaverActive"] = 1 if relay_saver_remaining > 0 else 0
+    props["relaySaverDelayedDevice"] = _idx_mask(state.relay_saver_paused_idx)
+    props["relaySaverMinDropWatts"] = cfg.relay_saver_min_drop_watts
+    props["relaySaverMinPower"] = cfg.relay_saver_min_power_watts
+    props["relaySaverHoldSeconds"] = cfg.relay_saver_hold_seconds
+    props["relaySaverRemainingSeconds"] = relay_saver_remaining
+    props["relaySaverReason"] = state.relay_saver_last_reason
     props["proxyVersion"] = PROXY_VERSION
     props["latestPowerCmd"] = latest_power_cmd
     props["device_active_count"] = state.device_active_count
@@ -603,6 +630,22 @@ def _transition_recent(state: ProxyState, cfg: Config) -> bool:
             state.forced_dual_transition_start_ts,
         )
     )
+
+
+def _relay_saver_remaining_seconds(
+    state: ProxyState,
+    cfg: Config,
+    current_ts: float,
+) -> int:
+    if not getattr(cfg, "relay_saver_enable", False):
+        return 0
+    remaining = [
+        until_ts - current_ts
+        for idx, until_ts in getattr(state, "relay_saver_until_ts_by_idx", {}).items()
+        if idx in getattr(state, "relay_saver_paused_idx", [])
+        and until_ts > current_ts
+    ]
+    return math.ceil(max(remaining)) if remaining else 0
 
 
 def _reported_power_cmd(props: dict) -> int:

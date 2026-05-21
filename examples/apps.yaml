@@ -128,6 +128,15 @@ zendure_proxy:
   anti_pingpong_energy_price_per_kwh: 0.30
   anti_pingpong_smart_disable_bad_minutes: 2
 
+  # Relay saver mode for large drops to zero power.
+  # When enabled, a Zendure that would drop from a high measured command to
+  # 0 W keeps the previous direction at relay_saver_min_power_watts for
+  # relay_saver_hold_seconds. Reserve mode payloads still have priority.
+  relay_saver_enable: false
+  relay_saver_min_drop_watts: 900
+  relay_saver_min_power_watts: 30
+  relay_saver_hold_seconds: 30
+
   # Solar power fields.
   solar_power_info: false
 

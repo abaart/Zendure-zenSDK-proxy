@@ -75,6 +75,12 @@ class Config:
     anti_pingpong_energy_price_per_kwh: float = 0.30
     anti_pingpong_smart_disable_bad_minutes: int = 2
 
+    # Relay saver mode. Keeps devices briefly above zero after large drops.
+    relay_saver_enable: bool = False
+    relay_saver_min_drop_watts: int = 900
+    relay_saver_min_power_watts: int = 30
+    relay_saver_hold_seconds: int = 30
+
     # Extras
     solar_power_info: bool = False
     manual_mode_repeat: bool = True
@@ -221,6 +227,10 @@ def load_config(args: dict) -> Config:
         anti_pingpong_smart_disable_bad_minutes=int(
             args.get("anti_pingpong_smart_disable_bad_minutes", 2)
         ),
+        relay_saver_enable=_bool(args.get("relay_saver_enable", False)),
+        relay_saver_min_drop_watts=int(args.get("relay_saver_min_drop_watts", 900)),
+        relay_saver_min_power_watts=int(args.get("relay_saver_min_power_watts", 30)),
+        relay_saver_hold_seconds=int(args.get("relay_saver_hold_seconds", 30)),
         solar_power_info=_bool(args.get("solar_power_info", False)),
         manual_mode_repeat=_bool(args.get("manual_mode_repeat", True)),
         log_file_enabled=_bool(args.get("log_file_enabled", True)),

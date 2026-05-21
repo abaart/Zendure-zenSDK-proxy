@@ -98,6 +98,10 @@ class ProxyState:
     anti_pingpong_smart_loss_kwh: float = 0.0
     anti_pingpong_smart_net_eur: float = 0.0
     anti_pingpong_smart_bad_minutes: int = 0
+    relay_saver_paused_idx: list[int] = field(default_factory=list)
+    relay_saver_until_ts_by_idx: dict[int, float] = field(default_factory=dict)
+    relay_saver_sign_by_idx: dict[int, int] = field(default_factory=dict)
+    relay_saver_last_reason: str = ""
 
     # Flags
     ac_mode_inconsistent: bool = False

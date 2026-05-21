@@ -678,13 +678,67 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
                 "sensor.zendure_proxy_incoming_get_total": "5",
                 "sensor.zendure_proxy_queue_get_coalesced_total": "7",
                 "sensor.zendure_proxy_device_1_get_total": "11",
+                "sensor.zendure_proxy_device_1_relay_switches_total": "13",
             }
         )
 
-        self.assertEqual(restored, 3)
+        self.assertEqual(restored, 4)
         self.assertEqual(metrics.incoming["GET"].total, 5)
         self.assertEqual(metrics.queue_get_coalesced_requests_total, 7)
         self.assertEqual(metrics.devices[0].get.total, 11)
+        self.assertEqual(metrics.devices[0].relay_switches_total, 13)
+
+    def test_metrics_relay_switch_counter_uses_measured_edges(self) -> None:
+        metrics = MetricsRegistry(1)
+
+        metrics.record_device_relay_measurement(0, False)
+        metrics.record_device_relay_measurement(0, False)
+        metrics.record_device_relay_measurement(0, True)
+        metrics.record_device_relay_measurement(0, True)
+        metrics.record_device_relay_measurement(0, False)
+        metrics.record_device_relay_measurement(0, False)
+
+        self.assertEqual(metrics.devices[0].relay_switches_total, 2)
+
+    def test_execute_get_records_relay_switches_from_fresh_measurements(self) -> None:
+        cfg = Config(device_ips=["ip1", "ip2"])
+        state = ProxyState(
+            device_count=2,
+            devices=[DeviceState(ip="ip1"), DeviceState(ip="ip2")],
+            startup_ts=100.0,
+        )
+        metrics = MetricsRegistry(2)
+        clients = [
+            _MutableGetClient(
+                _device(1, "SN1", output_pack_power=0, pack_input_power=0)
+            ),
+            _MutableGetClient(
+                _device(2, "SN2", output_pack_power=0, pack_input_power=20)
+            ),
+        ]
+
+        asyncio.run(
+            execute_get(clients, state, cfg, lambda *args, **kwargs: None, metrics)
+        )
+        clients[0].response = _device(
+            1, "SN1", output_pack_power=0, pack_input_power=15
+        )
+        clients[1].response = None
+        asyncio.run(
+            execute_get(clients, state, cfg, lambda *args, **kwargs: None, metrics)
+        )
+        clients[0].response = _device(
+            1, "SN1", output_pack_power=0, pack_input_power=0
+        )
+        clients[1].response = _device(
+            2, "SN2", output_pack_power=0, pack_input_power=20
+        )
+        asyncio.run(
+            execute_get(clients, state, cfg, lambda *args, **kwargs: None, metrics)
+        )
+
+        self.assertEqual(metrics.devices[0].relay_switches_total, 2)
+        self.assertEqual(metrics.devices[1].relay_switches_total, 0)
 
     def test_diagnostics_reset_clears_node_red_counters(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
@@ -1063,6 +1117,14 @@ class _DelayedGetClient:
         self._event.set()
 
 
+class _MutableGetClient:
+    def __init__(self, response: dict | None):
+        self.response = response
+
+    async def get(self) -> dict | None:
+        return self.response
+
+
 class _NeverResolvingQueue:
     async def enqueue_get(self):
         return asyncio.get_running_loop().create_future()
@@ -1170,11 +1232,15 @@ def _device(
     ac_mode: int | None = 1,
     input_limit: int = 100,
     output_limit: int = 0,
+    output_pack_power: int = 0,
+    pack_input_power: int | None = None,
     grid_input_power: int | None = None,
     output_home_power: int = 0,
 ) -> dict:
     if grid_input_power is None:
         grid_input_power = 20 + idx
+    if pack_input_power is None:
+        pack_input_power = 10 + idx
     return {
         "sn": sn,
         "product": f"Product {idx}",
@@ -1183,8 +1249,8 @@ def _device(
             "acMode": ac_mode,
             "inputLimit": input_limit,
             "outputLimit": output_limit,
-            "outputPackPower": 0,
-            "packInputPower": 10 + idx,
+            "outputPackPower": output_pack_power,
+            "packInputPower": pack_input_power,
             "gridInputPower": grid_input_power,
             "outputHomePower": output_home_power,
             "solarInputPower": 0,

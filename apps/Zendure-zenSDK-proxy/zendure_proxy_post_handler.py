@@ -21,7 +21,7 @@ from zendure_proxy_anti_pingpong import (
 )
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_health import degraded_power_by_index, eligible_device_indices
+from zendure_proxy_health import eligible_device_indices
 from zendure_proxy_power import apply_transition, calc_active_count, distribute_power, now
 from zendure_proxy_standby import manage_standby
 from zendure_proxy_state import ProxyState
@@ -51,7 +51,6 @@ async def execute_post(
     devs = state.devices
     eligible = eligible_device_indices(state, cfg)
     eligible_set = set(eligible)
-    degraded_power = degraded_power_by_index(state, cfg)
     runtime_key = _first_runtime_mode_key(props)
     if runtime_key is not None:
         _apply_runtime_mode_prop(runtime_key, props[runtime_key], state)
@@ -132,7 +131,7 @@ async def execute_post(
 
     command_power = input_limit if ac_mode == 1 else (output_limit if ac_mode == 2 else 0)
     latest_power_cmd = _signed_power_cmd(ac_mode, command_power)
-    distribution_power = _residual_power_for_healthy(latest_power_cmd, degraded_power)
+    distribution_power = command_power
     record_power_direction(state, cfg, latest_power_cmd, is_repeat, now_ts)
 
     max_power = (state.max_power_in if ac_mode == 1 else state.max_power_out) or 800
@@ -270,26 +269,48 @@ async def execute_post(
             ]
             anti_abs_power = [abs(power) for power in anti_signed_power]
 
+    desired_signed_power = _desired_signed_power_by_device(
+        ac_mode, per_device, anti_payloads, anti_signed_power
+    )
+    relay_payloads = _relay_saver_payloads(
+        state, cfg, desired_signed_power, anti_payloads, invalid_direction, now_ts
+    )
+    relay_signed_power = [
+        _payload_signed_power(relay_payloads.get(i, {}))
+        for i in range(n)
+    ]
+    relay_abs_power = [abs(power) for power in relay_signed_power]
+
     # ── Send commands to all devices in parallel ───────────────────────────────
     tasks = []
     for i, client in enumerate(clients):
         if i not in eligible_set:
-            _record_device_power_command(
-                devs[i], degraded_power.get(i, 0), now_ts
-            )
+            _record_device_power_command(devs[i], 0, now_ts)
             continue
-        pwr = anti_abs_power[i] if anti_payloads is not None else per_device[i]
+        anti_owns_device = anti_payloads is not None and i in anti_payloads
+        relay_owns_device = i in relay_payloads
+        if anti_owns_device:
+            pwr = anti_abs_power[i]
+        elif relay_owns_device:
+            pwr = relay_abs_power[i]
+        elif anti_payloads is not None:
+            pwr = anti_abs_power[i]
+        else:
+            pwr = per_device[i]
         wake_standby_device = (
             not invalid_direction
             and (
                 pwr != 0
                 or i in state.anti_pingpong_reserve_idx
                 or i in state.anti_pingpong_paused_idx
+                or i in state.relay_saver_paused_idx
             )
             and getattr(devs[i], "standby_device", False)
         )
-        if anti_payloads is not None and i in anti_payloads:
+        if anti_owns_device:
             dp = dict(anti_payloads[i])
+        elif relay_owns_device:
+            dp = dict(relay_payloads[i])
         else:
             dp = _power_payload_for_device(
                 props,
@@ -312,17 +333,18 @@ async def execute_post(
             device_payload["sn"] = devs[i].sn
         if not _suppress_standby_post(devs[i], dp):
             tasks.append(client.post(device_payload))
-        signed_power = (
-            anti_signed_power[i]
-            if anti_payloads is not None and i in anti_payloads
-            else _signed_power_cmd(ac_mode, pwr)
-        )
+        if anti_owns_device:
+            signed_power = anti_signed_power[i]
+        elif relay_owns_device:
+            signed_power = relay_signed_power[i]
+        else:
+            signed_power = _signed_power_cmd(ac_mode, pwr)
         _record_device_power_command(devs[i], signed_power, now_ts)
 
     removed_active = set(prev_active_idx) - set(state.devices_active_idx)
     added_active = set(state.devices_active_idx) - set(prev_active_idx)
     for idx in removed_active:
-        if 0 <= idx < len(devs):
+        if 0 <= idx < len(devs) and idx not in state.relay_saver_paused_idx:
             devs[idx].latest_power_cmd_zero_ts = now_ts
     for idx in added_active:
         if 0 <= idx < len(devs):
@@ -335,18 +357,10 @@ async def execute_post(
     state.latest_power_cmd = latest_power_cmd
     if ac_mode == 1:
         state.input_limit = input_limit
-        state.input_limit_effective = (
-            input_limit
-            if anti_payloads is not None
-            else _effective_input_power(per_device, degraded_power)
-        )
+        state.input_limit_effective = input_limit if anti_payloads is not None else sum(per_device)
     elif ac_mode == 2:
         state.output_limit = output_limit
-        state.output_limit_effective = (
-            output_limit
-            if anti_payloads is not None
-            else _effective_output_power(per_device, degraded_power)
-        )
+        state.output_limit_effective = output_limit if anti_payloads is not None else sum(per_device)
     if not is_repeat:
         state.last_post_payload = payload
 
@@ -485,28 +499,6 @@ def _signed_power_cmd(ac_mode: int, power: int) -> int:
     return 0
 
 
-def _residual_power_for_healthy(
-    requested_power: int,
-    degraded_power: dict[int, int],
-) -> int:
-    residual = requested_power - sum(degraded_power.values())
-    if requested_power > 0:
-        return max(0, residual)
-    if requested_power < 0:
-        return max(0, -residual)
-    return 0
-
-
-def _effective_input_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
-    degraded_input = sum(power for power in degraded_power.values() if power > 0)
-    return sum(per_device) + degraded_input
-
-
-def _effective_output_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
-    degraded_output = sum(-power for power in degraded_power.values() if power < 0)
-    return sum(per_device) + degraded_output
-
-
 def _anti_pingpong_activation_active(
     state: ProxyState,
     cfg: Config,
@@ -613,6 +605,133 @@ def _payload_signed_power(payload: dict) -> int:
         return max(0, _int(payload.get("inputLimit", 0)))
     if ac_mode == 2:
         return -max(0, _int(payload.get("outputLimit", 0)))
+    return 0
+
+
+def _desired_signed_power_by_device(
+    ac_mode: int,
+    per_device: list[int],
+    anti_payloads: dict[int, dict] | None,
+    anti_signed_power: list[int],
+) -> list[int]:
+    if anti_payloads is not None:
+        return [
+            anti_signed_power[idx] if idx in anti_payloads else 0
+            for idx in range(len(per_device))
+        ]
+    return [_signed_power_cmd(ac_mode, power) for power in per_device]
+
+
+def _relay_saver_payloads(
+    state: ProxyState,
+    cfg: Config,
+    desired_signed_power: list[int],
+    anti_payloads: dict[int, dict] | None,
+    invalid_direction: bool,
+    now_ts: float,
+) -> dict[int, dict]:
+    state.relay_saver_paused_idx = []
+    if invalid_direction or not getattr(cfg, "relay_saver_enable", False):
+        _clear_relay_saver_state(state)
+        return {}
+
+    anti_owned = set(anti_payloads or {})
+    min_drop = max(0, int(getattr(cfg, "relay_saver_min_drop_watts", 900)))
+    min_power = max(0, int(getattr(cfg, "relay_saver_min_power_watts", 30)))
+    hold_seconds = max(0.0, float(getattr(cfg, "relay_saver_hold_seconds", 30)))
+    payloads: dict[int, dict] = {}
+    paused_idx: list[int] = []
+    reason = ""
+
+    for idx in list(getattr(state, "relay_saver_until_ts_by_idx", {}).keys()):
+        if idx < 0 or idx >= state.device_count:
+            _clear_relay_saver_device(state, idx)
+
+    for idx in range(state.device_count):
+        if idx in anti_owned:
+            _clear_relay_saver_device(state, idx)
+            continue
+
+        desired = desired_signed_power[idx] if idx < len(desired_signed_power) else 0
+        desired_sign = _power_sign(desired)
+        until_ts = state.relay_saver_until_ts_by_idx.get(idx, 0.0)
+        hold_sign = state.relay_saver_sign_by_idx.get(idx, 0)
+        expired_hold = False
+
+        if until_ts > now_ts and hold_sign != 0:
+            if desired_sign == hold_sign and abs(desired) > min_power:
+                _clear_relay_saver_device(state, idx)
+                continue
+            payloads[idx] = _relay_saver_payload_for_sign(
+                hold_sign, state.devices[idx].soc_limit, min_power
+            )
+            paused_idx.append(idx)
+            reason = reason or "hold_active"
+            continue
+
+        if until_ts > 0:
+            _clear_relay_saver_device(state, idx)
+            reason = reason or "expired"
+            expired_hold = True
+
+        previous = _int(getattr(state.devices[idx], "latest_power_cmd", 0))
+        previous_sign = _power_sign(previous)
+        if expired_hold or previous_sign == 0:
+            continue
+
+        crosses_zero = desired_sign == 0 or desired_sign != previous_sign
+        if not crosses_zero or abs(previous - desired) < min_drop:
+            continue
+
+        if hold_seconds <= 0:
+            continue
+
+        state.relay_saver_until_ts_by_idx[idx] = now_ts + hold_seconds
+        state.relay_saver_sign_by_idx[idx] = previous_sign
+        payloads[idx] = _relay_saver_payload_for_sign(
+            previous_sign, state.devices[idx].soc_limit, min_power
+        )
+        paused_idx.append(idx)
+        reason = (
+            "large_drop_to_zero"
+            if desired_sign == 0
+            else "large_sign_change"
+        )
+
+    state.relay_saver_paused_idx = paused_idx
+    active_until = any(
+        until_ts > now_ts
+        for until_ts in state.relay_saver_until_ts_by_idx.values()
+    )
+    if paused_idx or reason:
+        state.relay_saver_last_reason = reason
+    elif not active_until:
+        state.relay_saver_last_reason = ""
+    return payloads
+
+
+def _relay_saver_payload_for_sign(sign: int, soc_limit: int, power: int) -> dict:
+    ac_mode = 1 if sign > 0 else 2
+    return _delay_payload_for_device(ac_mode, soc_limit, power)
+
+
+def _clear_relay_saver_state(state: ProxyState) -> None:
+    state.relay_saver_paused_idx = []
+    state.relay_saver_until_ts_by_idx = {}
+    state.relay_saver_sign_by_idx = {}
+    state.relay_saver_last_reason = ""
+
+
+def _clear_relay_saver_device(state: ProxyState, idx: int) -> None:
+    state.relay_saver_until_ts_by_idx.pop(idx, None)
+    state.relay_saver_sign_by_idx.pop(idx, None)
+
+
+def _power_sign(power: int) -> int:
+    if power > 0:
+        return 1
+    if power < 0:
+        return -1
     return 0
 
 

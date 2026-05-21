@@ -98,6 +98,8 @@ class DeviceMetrics:
     active_request: int = 0
     last_success_ts: float = 0.0
     last_error_ts: float = 0.0
+    relay_switches_total: int = 0
+    relay_power_active: bool | None = None
 
 
 class MetricsRegistry:
@@ -170,6 +172,18 @@ class MetricsRegistry:
         self.queue_post_deduplicated_requests_total += max(0, int(deduplicated_posts))
         self.queue_post_deduplicated_groups_total += max(0, int(deduplicated_groups))
 
+    def record_device_relay_measurement(self, device_idx: int, active: bool) -> None:
+        if not 0 <= device_idx < len(self.devices):
+            return
+        device = self.devices[device_idx]
+        active = bool(active)
+        if device.relay_power_active is None:
+            device.relay_power_active = active
+            return
+        if device.relay_power_active != active:
+            device.relay_switches_total += 1
+            device.relay_power_active = active
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "uptime_s": max(0, int(_now() - self.started_ts)),
@@ -195,6 +209,7 @@ class MetricsRegistry:
                     "last_error_age_s": self._age(device.last_error_ts),
                     "GET": self._endpoint_snapshot(device.get),
                     "POST": self._endpoint_snapshot(device.post),
+                    "relay_switches_total": device.relay_switches_total,
                 }
                 for idx, device in enumerate(self.devices)
             ],
@@ -296,6 +311,10 @@ class MetricsRegistry:
                 device["GET"]["errors"] + device["POST"]["errors"],
                 _counter_attrs(),
             )
+            sensors[f"sensor.zendure_proxy_device_{idx}_relay_switches_total"] = (
+                device["relay_switches_total"],
+                _counter_attrs(),
+            )
             sensors[f"sensor.zendure_proxy_device_{idx}_error_rate"] = (
                 round(
                     (
@@ -370,6 +389,8 @@ class MetricsRegistry:
                   lambda value, metric=device.get: setattr(metric, "total", value))
             apply(f"sensor.zendure_proxy_device_{idx}_post_total",
                   lambda value, metric=device.post: setattr(metric, "total", value))
+            apply(f"sensor.zendure_proxy_device_{idx}_relay_switches_total",
+                  lambda value, metric=device: setattr(metric, "relay_switches_total", value))
             device_errors = get_int(f"sensor.zendure_proxy_device_{idx}_errors_total")
             if device_errors is not None:
                 device.get.errors = device_errors
@@ -419,6 +440,10 @@ class MetricsRegistry:
             lines.append(
                 f"zendure_proxy_outgoing_queue_depth{{device=\"{device['idx']}\"}} "
                 f"{device['queue_depth']}"
+            )
+            lines.append(
+                f"zendure_proxy_device_relay_switches_total{{device=\"{device['idx']}\"}} "
+                f"{device['relay_switches_total']}"
             )
         return lines
 
@@ -549,12 +574,13 @@ def _render_devices(snapshot: dict[str, Any]) -> str:
                 f"<td>{metrics['latency']['max']:.1f}</td>"
                 f"<td>{device['queue_depth']}</td>"
                 f"<td>{device['active_request']}</td>"
+                f"<td>{device['relay_switches_total']}</td>"
                 "</tr>"
             )
     return f"""<section>
 <h2>Outgoing Zendure Devices</h2>
 <table>
-<tr><th>Device</th><th>Method</th><th>Total</th><th>Errors</th><th>5m Error</th><th>Avg ms</th><th>P95 ms</th><th>Max ms</th><th>Queue</th><th>Active</th></tr>
+<tr><th>Device</th><th>Method</th><th>Total</th><th>Errors</th><th>5m Error</th><th>Avg ms</th><th>P95 ms</th><th>Max ms</th><th>Queue</th><th>Active</th><th>Relay switches</th></tr>
 {''.join(rows)}
 </table>
 </section>"""

@@ -39,6 +39,12 @@ async def manage_standby(
             set(getattr(state, "anti_pingpong_reserve_idx", []))
             | set(getattr(state, "anti_pingpong_paused_idx", []))
         ) & eligible_set
+    relay_saver_until = getattr(state, "relay_saver_until_ts_by_idx", {})
+    relay_saver_protected = {
+        idx for idx in getattr(state, "relay_saver_paused_idx", [])
+        if relay_saver_until.get(idx, 0.0) > now()
+    } & eligible_set
+    protected_set |= relay_saver_protected
     devs = state.devices
 
     for i, dev in enumerate(devs):
@@ -139,6 +145,12 @@ def _standby_allowed(idx: int, state: ProxyState, cfg: Config) -> bool:
     if getattr(state, "anti_pingpong_active", False) and idx in (
         set(getattr(state, "anti_pingpong_reserve_idx", []))
         | set(getattr(state, "anti_pingpong_paused_idx", []))
+    ):
+        return False
+    relay_saver_until = getattr(state, "relay_saver_until_ts_by_idx", {})
+    if (
+        idx in getattr(state, "relay_saver_paused_idx", [])
+        and relay_saver_until.get(idx, 0.0) > now()
     ):
         return False
     if idx >= len(state.devices):
