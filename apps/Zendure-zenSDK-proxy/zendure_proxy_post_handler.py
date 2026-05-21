@@ -12,7 +12,7 @@ from typing import Callable
 
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_health import degraded_power_by_index, eligible_device_indices
+from zendure_proxy_health import eligible_device_indices
 from zendure_proxy_power import apply_transition, calc_active_count, distribute_power, now
 from zendure_proxy_standby import manage_standby
 from zendure_proxy_state import ProxyState
@@ -42,7 +42,6 @@ async def execute_post(
     devs = state.devices
     eligible = eligible_device_indices(state, cfg)
     eligible_set = set(eligible)
-    degraded_power = degraded_power_by_index(state, cfg)
     runtime_key = _first_runtime_mode_key(props)
     if runtime_key is not None:
         _apply_runtime_mode_prop(runtime_key, props[runtime_key], state)
@@ -123,7 +122,7 @@ async def execute_post(
 
     command_power = input_limit if ac_mode == 1 else (output_limit if ac_mode == 2 else 0)
     latest_power_cmd = _signed_power_cmd(ac_mode, command_power)
-    distribution_power = _residual_power_for_healthy(latest_power_cmd, degraded_power)
+    distribution_power = command_power
 
     max_power = (state.max_power_in if ac_mode == 1 else state.max_power_out) or 800
 
@@ -172,7 +171,7 @@ async def execute_post(
         and prev_active_device in eligible_set
         and state.single_to_dual_transition_start_ts <= 0
         and state.forced_dual_transition_start_ts <= 0
-        and any(dev.latest_power_cmd != 0 for dev in devs)
+        and any(devs[idx].latest_power_cmd != 0 for idx in eligible)
     ):
         state.single_to_dual_transition_start_ts = now_ts
         state.single_to_dual_transition_original_device = prev_active_device
@@ -212,8 +211,6 @@ async def execute_post(
     tasks = []
     for i, client in enumerate(clients):
         if i not in eligible_set:
-            stuck_power = degraded_power.get(i, 0)
-            _record_device_power_command(devs[i], stuck_power, now_ts)
             continue
         pwr = per_device[i]
         wake_standby_device = (
@@ -260,10 +257,10 @@ async def execute_post(
     state.latest_power_cmd = latest_power_cmd
     if ac_mode == 1:
         state.input_limit = input_limit
-        state.input_limit_effective = _effective_input_power(per_device, degraded_power)
+        state.input_limit_effective = sum(per_device)
     elif ac_mode == 2:
         state.output_limit = output_limit
-        state.output_limit_effective = _effective_output_power(per_device, degraded_power)
+        state.output_limit_effective = sum(per_device)
     if not is_repeat:
         state.last_post_payload = payload
 
@@ -400,28 +397,6 @@ def _signed_power_cmd(ac_mode: int, power: int) -> int:
     if ac_mode == 2:
         return -power
     return 0
-
-
-def _residual_power_for_healthy(
-    requested_power: int,
-    degraded_power: dict[int, int],
-) -> int:
-    residual = requested_power - sum(degraded_power.values())
-    if requested_power > 0:
-        return max(0, residual)
-    if requested_power < 0:
-        return max(0, -residual)
-    return 0
-
-
-def _effective_input_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
-    degraded_input = sum(power for power in degraded_power.values() if power > 0)
-    return sum(per_device) + degraded_input
-
-
-def _effective_output_power(per_device: list[int], degraded_power: dict[int, int]) -> int:
-    degraded_output = sum(-power for power in degraded_power.values() if power < 0)
-    return sum(per_device) + degraded_output
 
 
 def _suppress_standby_post(dev, props: dict) -> bool:

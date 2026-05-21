@@ -52,8 +52,10 @@ zendure_proxy:
   # The proxy keeps using cached device data for get_cache_max_age seconds.
   # A recovered device must have successful outgoing GET requests for
   # get_recovery_window seconds before it is used for power distribution again.
-  # A degraded device's last measured power is counted for
-  # degraded_power_hold_seconds seconds before the device is treated as dead.
+  # A degraded device is excluded from POST commands.
+  # Power commands are distributed across healthy devices without subtracting
+  # the degraded device's lastKnownPower.
+  # degraded_power_hold_seconds controls when a degraded device becomes dead.
   ha_get_response_timeout: 8
   get_cache_max_age: 300
   get_rate_limit_window: 1

@@ -827,9 +827,10 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
             post for post in clients[2].posts
             if "inputLimit" in post["properties"]
         ]
-        self.assertEqual(client_1_power_posts[0]["properties"]["inputLimit"], 550)
-        self.assertEqual(client_3_power_posts[0]["properties"]["inputLimit"], 550)
-        self.assertEqual(state.devices[1].latest_power_cmd, 500)
+        self.assertEqual(client_1_power_posts[0]["properties"]["inputLimit"], 800)
+        self.assertEqual(client_3_power_posts[0]["properties"]["inputLimit"], 800)
+        self.assertEqual(state.input_limit_effective, 1600)
+        self.assertEqual(state.devices[1].latest_power_cmd, 0)
 
         state.devices[1].recovery_started_ts = 1.0
         clients = [_FakeClient() for _idx in range(3)]
@@ -853,6 +854,58 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertTrue(
             any("inputLimit" in post["properties"] for post in clients[1].posts)
         )
+
+    def test_post_sends_full_discharge_command_when_device_is_excluded(self) -> None:
+        cfg = Config(
+            device_ips=["ip1", "ip2", "ip3"],
+            get_cache_max_age=300.0,
+            get_recovery_window=30.0,
+            degraded_power_hold_seconds=999999999.0,
+        )
+        state = ProxyState(
+            device_count=3,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1", electric_level=50),
+                DeviceState(
+                    ip="ip2",
+                    sn="SN2",
+                    electric_level=50,
+                    last_response=_device(
+                        2,
+                        "SN2",
+                        ac_mode=2,
+                        input_limit=0,
+                        output_limit=500,
+                    ),
+                    last_successful_get_ts=50.0,
+                    excluded_since_ts=100.0,
+                    recovery_started_ts=0.0,
+                ),
+                DeviceState(ip="ip3", sn="SN3", electric_level=50),
+            ],
+            max_power_out=800,
+            ac_mode=2,
+            startup_ts=1.0,
+        )
+        clients = [_FakeClient() for _idx in range(3)]
+
+        asyncio.run(
+            execute_post(
+                {"properties": {"acMode": 2, "outputLimit": 1600}},
+                clients,
+                state,
+                cfg,
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        self.assertGreaterEqual(len(clients[0].posts), 1)
+        self.assertEqual(len(clients[1].posts), 0)
+        self.assertGreaterEqual(len(clients[2].posts), 1)
+        self.assertEqual(clients[0].posts[0]["properties"]["outputLimit"], 800)
+        self.assertEqual(clients[2].posts[0]["properties"]["outputLimit"], 800)
+        self.assertEqual(state.output_limit_effective, 1600)
+        self.assertEqual(state.devices[1].latest_power_cmd, 0)
 
 
 def _combined_three_device_response() -> dict:

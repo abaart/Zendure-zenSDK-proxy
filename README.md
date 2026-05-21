@@ -114,17 +114,18 @@ In gewone taal:
   bruikbare response oplevert. Voorbeelden zijn: geen antwoord binnen
   `zendure_request_timeout`, standaard 60 seconden, een verbroken verbinding,
   een HTTP fout, of een response die de proxy niet kan verwerken.
-- Een `Degraded` Zendure krijgt geen POST opdrachten meer. De proxy gaat er
-  tijdelijk wel vanuit dat die Zendure blijft laden of ontladen met het wattage
-  uit de laatste succesvolle GET response. Daardoor kan de proxy het resterende
-  gevraagde wattage naar de gezonde Zendures sturen.
+- Een `Degraded` Zendure krijgt geen POST opdrachten meer. `execute_post(...)`
+  verdeelt de volledige vermogensopdracht van Home Assistant over de gezonde
+  Zendures. Bij P1-sturing zit het werkelijke laad- of ontlaadvermogen van een
+  tijdelijk onbereikbare Zendure al in de P1-waarde van de slimme meter. Daarom
+  trekt de proxy `lastKnownPower` niet af van de vermogensopdracht.
+  `proxyHealth.degradedDevices[].lastKnownPower` blijft zichtbaar voor diagnose.
   Het overslaan van POST opdrachten naar een `Degraded` Zendure ontlast die
   Zendure, zodat herstel meer kans krijgt. Het overslaan voorkomt ook dat oude
   POST opdrachten voor die Zendure opstapelen terwijl de verbinding slecht is.
 - `degraded_power_hold_seconds`, standaard 1800 seconden, bepaalt hoe lang de
-  proxy die laatste bekende vermogensstand meetelt. Na die periode wordt de Zendure
-  `Dead`, en de proxy gaat er dan vanuit dat die Zendure geen vermogen meer
-  levert of opneemt.
+  proxy een Zendure als `Degraded` toont voordat de proxy die Zendure als `Dead`
+  toont. De instelling blijft bestaan voor bestaande `apps.yaml` configuraties.
 - Wanneer een uitgevallen Zendure weer succesvolle GET responses geeft, wacht de
   proxy `get_recovery_window`, standaard 30 seconden, voordat die Zendure weer
   POST opdrachten krijgt. Dan is deze Zendure weer `Healthy`.
@@ -549,11 +550,11 @@ Zendure langer traag blijft. Wanneer een GET ronde te lang duurt voor Home
 Assistant, geeft `_execute_report_request(...)` een geldige cached response
 terug zolang `get_cache_max_age` dat toestaat. Wanneer een Zendure geen
 bruikbare GET response geeft, markeert `zendure_proxy_health.py` die Zendure als
-`Degraded`. `execute_post(...)` stuurt dan geen POST opdrachten naar die Zendure
-en gebruikt tijdelijk het laatst gemeten wattage uit de laatste succesvolle GET
-response. Daardoor krijgt Home Assistant nog een response en krijgen gezonde
-Zendures geen extra opdrachten die eigenlijk voor de tijdelijk onbereikbare
-Zendure bedoeld waren.
+`Degraded`. `execute_post(...)` stuurt dan geen POST opdrachten naar die Zendure.
+`execute_post(...)` verdeelt de volledige vermogensopdracht van Home Assistant
+over de gezonde Zendures. Bij P1-sturing bevat de P1-waarde al het echte laad-
+of ontlaadvermogen van de tijdelijk onbereikbare Zendure, dus de proxy gebruikt
+het laatst gemeten wattage alleen nog als diagnosewaarde in `lastKnownPower`.
 
 De logregels `Queue cleanup: coalesced ... queued GET requests into 1 upstream
 GET` en `Queue cleanup: deduplicated ... queued POST requests` betekenen dat de
