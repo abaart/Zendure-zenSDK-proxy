@@ -103,6 +103,11 @@ async def _delayed_standby(
                     },
                 }
             )
+            close_post_connection = getattr(
+                clients[idx], "close_post_connection", None
+            )
+            if close_post_connection is not None:
+                await close_post_connection()
             dev.smart_mode = 0
             dev.standby_device = True
             if zero_ts > 0:

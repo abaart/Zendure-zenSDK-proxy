@@ -380,6 +380,8 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
     def test_get_cache_config_defaults_and_overrides_are_loaded(self) -> None:
         default_cfg = Config(device_ips=[])
         self.assertEqual(default_cfg.zendure_request_timeout, 60.0)
+        self.assertTrue(default_cfg.separate_get_post_connections)
+        self.assertEqual(default_cfg.idle_connection_close_seconds, 600.0)
         self.assertEqual(default_cfg.ha_get_response_timeout, 8.0)
         self.assertEqual(default_cfg.get_cache_max_age, 300.0)
         self.assertEqual(default_cfg.get_rate_limit_window, 1.0)

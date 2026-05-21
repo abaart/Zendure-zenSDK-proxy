@@ -16,6 +16,15 @@ from conftest import FakeDeviceClient, device_response
 from node_red_expected import STANDBY_POST_PROPERTIES
 
 
+class CloseTrackingFakeDeviceClient(FakeDeviceClient):
+    def __init__(self, get_response: dict | None = None):
+        super().__init__(get_response)
+        self.close_post_connection_calls = 0
+
+    async def close_post_connection(self) -> None:
+        self.close_post_connection_calls += 1
+
+
 def _repeat_state(device_count: int = 2) -> ProxyState:
     state = ProxyState(
         device_count=device_count,
@@ -88,7 +97,8 @@ def test_delayed_standby_posts_smartmode_and_zero_power_properties() -> None:
         ],
     )
     state.devices_active_idx = [0]
-    clients = [FakeDeviceClient(), FakeDeviceClient()]
+    standby_client = CloseTrackingFakeDeviceClient()
+    clients = [FakeDeviceClient(), standby_client]
 
     asyncio.run(
         _delayed_standby(
@@ -103,6 +113,7 @@ def test_delayed_standby_posts_smartmode_and_zero_power_properties() -> None:
     assert clients[1].post_payloads == [
         {"sn": "SN2", "properties": STANDBY_POST_PROPERTIES}
     ]
+    assert standby_client.close_post_connection_calls == 1
     assert state.devices[1].standby_device is True
 
 
@@ -486,6 +497,8 @@ def test_zendure_request_timeout_is_user_configurable() -> None:
     )
 
     assert cfg.zendure_request_timeout == 4.5
+    assert cfg.separate_get_post_connections is True
+    assert cfg.idle_connection_close_seconds == 600.0
 
     async def run_client() -> None:
         client = DeviceClient(
@@ -493,7 +506,99 @@ def test_zendure_request_timeout_is_user_configurable() -> None:
             lambda *args, **kwargs: None,
             request_timeout=cfg.zendure_request_timeout,
         )
-        assert client._session.kwargs["timeout"].total == 4.5
+        assert client._sessions["GET"].kwargs["timeout"].total == 4.5
+        assert client._sessions["POST"].kwargs["timeout"].total == 4.5
+        await client.close()
+
+    asyncio.run(run_client())
+
+
+def test_connection_options_are_user_configurable() -> None:
+    cfg = load_config(
+        {
+            "ip_zendure_1": "192.168.1.101",
+            "separate_get_post_connections": "false",
+            "idle_connection_close_seconds": "120",
+        }
+    )
+
+    assert cfg.separate_get_post_connections is False
+    assert cfg.idle_connection_close_seconds == 120.0
+
+
+def test_device_client_uses_separate_get_and_post_sessions_by_default() -> None:
+    async def run_client() -> None:
+        client = DeviceClient("ip1", lambda *args, **kwargs: None)
+
+        assert sorted(client._sessions) == ["GET", "POST"]
+        assert client._queues["GET"] is not client._queues["POST"]
+        assert client._sessions["GET"].kwargs["connector"].kwargs["limit"] == 1
+        assert client._sessions["POST"].kwargs["connector"].kwargs["limit"] == 1
+
+        await client.close()
+
+    asyncio.run(run_client())
+
+
+def test_device_client_can_use_shared_get_post_session() -> None:
+    async def run_client() -> None:
+        client = DeviceClient(
+            "ip1",
+            lambda *args, **kwargs: None,
+            separate_get_post_connections=False,
+        )
+
+        assert sorted(client._sessions) == ["SHARED"]
+        assert client._queues["GET"] is client._queues["POST"]
+
+        await client.close()
+
+    asyncio.run(run_client())
+
+
+def test_device_client_closes_post_session_without_closing_get_session() -> None:
+    async def run_client() -> None:
+        client = DeviceClient("ip1", lambda *args, **kwargs: None)
+        get_session = client._sessions["GET"]
+        post_session = client._sessions["POST"]
+
+        await client.close_post_connection()
+
+        assert client._sessions["GET"] is get_session
+        assert client._sessions["POST"] is None
+        assert get_session.closed is False
+        assert post_session.closed is True
+
+        recreated_post_session = await client._start_request("POST")
+        await client._finish_request("POST")
+
+        assert recreated_post_session is not post_session
+        assert client._sessions["POST"] is recreated_post_session
+
+        await client.close()
+
+    asyncio.run(run_client())
+
+
+def test_device_client_closes_idle_sessions() -> None:
+    async def run_client() -> None:
+        client = DeviceClient(
+            "ip1",
+            lambda *args, **kwargs: None,
+            idle_connection_close_seconds=600.0,
+        )
+        get_session = client._sessions["GET"]
+        post_session = client._sessions["POST"]
+        client._last_activity_ts["GET"] = 100.0
+        client._last_activity_ts["POST"] = 100.0
+
+        await client.close_idle_connections(current_ts=701.0)
+
+        assert client._sessions["GET"] is None
+        assert client._sessions["POST"] is None
+        assert get_session.closed is True
+        assert post_session.closed is True
+
         await client.close()
 
     asyncio.run(run_client())

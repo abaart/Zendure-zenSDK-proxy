@@ -18,6 +18,8 @@ class Config:
     server_port: int = 8120
     server_host: str = "0.0.0.0"
     zendure_request_timeout: float = 60.0
+    separate_get_post_connections: bool = True
+    idle_connection_close_seconds: float = 600.0
     ha_get_response_timeout: float = 8.0
     get_cache_max_age: float = 300.0
     get_rate_limit_window: float = 1.0
@@ -109,6 +111,12 @@ def load_config(args: dict) -> Config:
         server_port=int(args.get("server_port", 8120)),
         server_host=str(args.get("server_host", "0.0.0.0")),
         zendure_request_timeout=float(args.get("zendure_request_timeout", 60.0)),
+        separate_get_post_connections=_bool(
+            args.get("separate_get_post_connections", True)
+        ),
+        idle_connection_close_seconds=float(
+            args.get("idle_connection_close_seconds", 600.0)
+        ),
         ha_get_response_timeout=float(args.get("ha_get_response_timeout", 8.0)),
         get_cache_max_age=float(args.get("get_cache_max_age", 300.0)),
         get_rate_limit_window=float(args.get("get_rate_limit_window", 1.0)),

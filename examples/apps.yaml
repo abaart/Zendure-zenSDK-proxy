@@ -39,6 +39,14 @@ zendure_proxy:
   # answer HA from cache while the Zendure request continues internally.
   zendure_request_timeout: 60
 
+  # Device HTTP connection behavior.
+  # true uses one GET session and one POST session per Zendure device, so one
+  # GET and one POST can run at the same time for the same device.
+  # false uses one shared GET/POST session per Zendure device.
+  # idle_connection_close_seconds closes idle sessions after 10 minutes.
+  separate_get_post_connections: true
+  idle_connection_close_seconds: 600
+
   # GET cache and health behavior.
   # Home Assistant receives a cached GET response after ha_get_response_timeout.
   # The proxy keeps using cached device data for get_cache_max_age seconds.

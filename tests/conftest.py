@@ -72,12 +72,19 @@ def _install_fake_aiohttp() -> None:
         def __init__(self, total=None):
             self.total = total
 
-    class ClientSession:
+    class TCPConnector:
         def __init__(self, *args, **kwargs):
             self.args = args
             self.kwargs = kwargs
 
+    class ClientSession:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.closed = False
+
         async def close(self):
+            self.closed = True
             return None
 
     def json_response(data, status=200):
@@ -91,6 +98,7 @@ def _install_fake_aiohttp() -> None:
     web.json_response = json_response
     aiohttp.web = web
     aiohttp.ClientTimeout = ClientTimeout
+    aiohttp.TCPConnector = TCPConnector
     aiohttp.ClientSession = ClientSession
     sys.modules.setdefault("aiohttp", aiohttp)
     sys.modules.setdefault("aiohttp.web", web)

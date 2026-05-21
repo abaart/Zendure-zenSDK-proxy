@@ -66,6 +66,12 @@ class ZendureProxy(hass.Hass):
                 self._metrics,
                 idx,
                 request_timeout=self._cfg.zendure_request_timeout,
+                separate_get_post_connections=(
+                    self._cfg.separate_get_post_connections
+                ),
+                idle_connection_close_seconds=(
+                    self._cfg.idle_connection_close_seconds
+                ),
             )
             for idx, ip in enumerate(self._cfg.device_ips)
         ]
@@ -150,6 +156,12 @@ class ZendureProxy(hass.Hass):
             self._processor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._processor_task
+        for device in getattr(self, "_state", ProxyState()).devices:
+            if device.standby_task and not device.standby_task.done():
+                device.standby_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await device.standby_task
+                device.standby_task = None
         for client in self._clients:
             await client.close()
         self._proxy_log("Zendure proxy stopped")
