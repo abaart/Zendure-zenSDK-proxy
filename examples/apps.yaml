@@ -14,9 +14,22 @@ zendure_proxy:
   class: ZendureProxy
 
   # Required: IP addresses of your Zendure devices.
-  ip_zendure_1: "192.168.x.x"
-  ip_zendure_2: "192.168.x.y"
-  ip_zendure_3: ""              # Leave empty for a 2-device setup.
+  # The proxy supports up to 10 devices. Optional per-device watt caps keep a
+  # device below the hardware maximum reported by chargeMaxLimit and
+  # inverseMaxPower.
+  devices:
+    - ip: "192.168.x.x"
+      charge_max_watts:
+      discharge_max_watts:
+    - ip: "192.168.x.y"
+      charge_max_watts:
+      discharge_max_watts:
+
+  # Numbered keys also work, and can be used through ip_zendure_10.
+  # Do not use both forms for the same slot unless you want devices[N-1] to win.
+  # ip_zendure_1: "192.168.x.x"
+  # zendure_1_charge_max_watts: 600
+  # zendure_1_discharge_max_watts: 700
 
   # HTTP server.
   # The proxy listens on this port inside the AppDaemon container.
@@ -63,8 +76,8 @@ zendure_proxy:
   degraded_power_hold_seconds: 1800
 
   # Mode-switching thresholds.
-  # Above single_mode_upperlimit_percent * maxPower, switch to multi-device mode.
-  # Below single_mode_lowerlimit_percent * maxPower, switch back to single device.
+  # Above single_mode_upperlimit_percent * effective capacity, switch to more devices.
+  # Below single_mode_lowerlimit_percent * effective capacity, switch to fewer devices.
   single_mode_upperlimit_percent: 100
   single_mode_lowerlimit_percent: 40
 
@@ -95,8 +108,8 @@ zendure_proxy:
   equal_mode: false
 
   # Reserve mode for short zero-on-the-meter charge/discharge oscillation.
-  # Reserve mode is the power anti-pingpong mode. The proxy keeps one Zendure
-  # ready in the opposite direction with a small reserve power. Reserve mode can
+  # Reserve mode is the power anti-pingpong mode. The proxy keeps one or more
+  # Zendures ready in the opposite direction with a small reserve power. Reserve mode can
   # reduce relay switches and react faster to short import peaks, but reserve
   # mode uses extra energy because multiple Zendures stay awake and
   # intentionally work against each other.
@@ -172,7 +185,7 @@ zendure_proxy:
   # Proxy response HA sensors.
   # true publishes sensor.zendure_2_soc_limiet_status,
   # sensor.zendure_2_serienummer, sensor.dual_mode_demper_status, and related
-  # proxy sensors directly from AppDaemon when no existing entity with the same
+  # proxy sensors through sensor.zendure_10_* directly from AppDaemon when no existing entity with the same
   # entity_id exists.
   proxy_ha_sensors_enabled: true
   proxy_ha_sensors_skip_existing: true

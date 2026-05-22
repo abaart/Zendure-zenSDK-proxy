@@ -146,6 +146,35 @@ def test_equal_mode_distributes_power_equally_across_active_devices() -> None:
     ]
 
 
+def test_equal_mode_respects_mixed_hardware_and_yaml_charge_caps() -> None:
+    state = _state(4)
+    state.equal_mode = True
+    state.devices[0].charge_max_limit = 600
+    state.devices[1].charge_max_limit = 1200
+    state.devices[2].charge_max_limit = 1200
+    state.devices[3].charge_max_limit = 1200
+    state.devices[0].configured_charge_max_watts = 500
+    state.devices[2].configured_charge_max_watts = 700
+    clients = [FakeDeviceClient() for _idx in range(4)]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 3000}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3", "ip4"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        500,
+        900,
+        700,
+        900,
+    ]
+
+
 def test_invalid_direction_command_does_not_change_active_device() -> None:
     state = _state(2)
     state.ac_mode = 2
@@ -463,6 +492,39 @@ def test_anti_pingpong_mode_switch_delay_respects_soc_limit() -> None:
         "inputLimit": 0,
         "outputLimit": 0,
     }
+
+
+def test_anti_pingpong_uses_multiple_reserve_devices_with_five_devices() -> None:
+    state = _state(5)
+    state.anti_pingpong_active = True
+    state.devices_active_idx = [0]
+    state.single_mode_active_device = 0
+    for idx, soc in enumerate([20, 30, 40, 80, 90]):
+        state.devices[idx].electric_level = soc
+    clients = [FakeDeviceClient() for _idx in range(5)]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 900}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2", "ip3", "ip4", "ip5"],
+                anti_pingpong_enable=True,
+                anti_pingpong_activation_mode="smart",
+                anti_pingpong_reserve_count=2,
+                anti_pingpong_reserve_power_watts=30,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.anti_pingpong_reserve_idx == [4, 3]
+    assert state.anti_pingpong_service_idx == [0, 1]
+    assert clients[3].post_payloads[0]["properties"]["outputLimit"] == 30
+    assert clients[4].post_payloads[0]["properties"]["outputLimit"] == 30
+    assert clients[0].post_payloads[0]["properties"]["inputLimit"] > 0
+    assert clients[1].post_payloads[0]["properties"]["inputLimit"] > 0
 
 
 def test_anti_pingpong_off_delay_keeps_weighted_charge_direction() -> None:
@@ -1171,6 +1233,39 @@ def test_dual_mode_damper_keeps_single_device_power() -> None:
 
     assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
         800,
+        0,
+    ]
+
+
+def test_dual_mode_damper_uses_active_device_cap_with_mixed_caps() -> None:
+    state = _state(2)
+    state.latest_power_cmd = -450
+    state.devices[0].electric_level = 90
+    state.devices[1].electric_level = 20
+    state.devices[0].inverse_max_power = 500
+    state.devices[1].inverse_max_power = 1200
+    state.devices_active_idx = [0]
+    state.single_mode_active_device = 0
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 650}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                damper_enable=True,
+                damper_amount=200,
+                damper_timer=120,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
+        500,
         0,
     ]
 

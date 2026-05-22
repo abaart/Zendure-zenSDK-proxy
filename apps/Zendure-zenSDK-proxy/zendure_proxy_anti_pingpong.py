@@ -144,6 +144,19 @@ def select_anti_pingpong_split(
     if len(reserve_pool) < reserve_count:
         reserve_pool = reserve_candidates
     reserve_idx = reserve_pool[:reserve_count]
+    reserve_ac_mode = 2 if ac_mode == 1 else 1
+    configured_reserve_power = max(
+        0,
+        int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)),
+    )
+    reserve_power_by_idx = {
+        idx: min(configured_reserve_power, _direction_cap(state.devices[idx], reserve_ac_mode))
+        for idx in reserve_idx
+        if _direction_cap(state.devices[idx], reserve_ac_mode) > 0
+    }
+    reserve_idx = list(reserve_power_by_idx)
+    if not reserve_idx:
+        return _inactive("reserve_capacity")
 
     service_candidates = _service_candidates(state, ac_mode, eligible, reserve_idx)
     if not service_candidates:
@@ -157,8 +170,7 @@ def select_anti_pingpong_split(
         service_idx = [service_candidates[0]]
 
     service_capacity = _service_capacity(state, ac_mode, service_idx, max_power)
-    reserve_power = max(0, int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)))
-    reserve_total = reserve_power * len(reserve_idx)
+    reserve_total = sum(reserve_power_by_idx.values())
     needed_power = requested_power + reserve_total
 
     for idx in service_candidates:
@@ -176,7 +188,7 @@ def select_anti_pingpong_split(
         service_idx=service_idx,
         reserve_idx=reserve_idx,
         service_power=needed_power,
-        reserve_power_by_idx={idx: reserve_power for idx in reserve_idx},
+        reserve_power_by_idx=reserve_power_by_idx,
         reason="active",
     )
 
@@ -300,11 +312,10 @@ def reserve_discharge_capacity_watts(
 ) -> int:
     candidates = _reserve_candidates(state, cfg, 1, eligible)
     reserve_count = max(1, int(getattr(cfg, "anti_pingpong_reserve_count", 1)))
-    max_out = getattr(state, "max_power_out", 800) or 800
     capacity = 0
     for idx in candidates[:reserve_count]:
         dev = state.devices[idx]
-        capacity += min(max_out, dev.inverse_max_power or max_out)
+        capacity += _direction_cap(dev, 2)
     return capacity
 
 
@@ -330,6 +341,7 @@ def _reserve_candidates(
             idx for idx in eligible
             if devs[idx].soc_limit != 2
             and devs[idx].electric_level >= min_soc_pct + margin
+            and _direction_cap(devs[idx], 2) > 0
         ]
         return sorted(candidates, key=lambda idx: devs[idx].electric_level, reverse=True)
     if ac_mode == 2:
@@ -337,6 +349,7 @@ def _reserve_candidates(
             idx for idx in eligible
             if devs[idx].soc_limit != 1
             and devs[idx].electric_level <= soc_set_pct - margin
+            and _direction_cap(devs[idx], 1) > 0
         ]
         return sorted(candidates, key=lambda idx: devs[idx].electric_level)
     return []
@@ -370,12 +383,18 @@ def _service_candidates(
     blocked = set(reserve_idx)
     if ac_mode == 1:
         candidates = [
-            idx for idx in eligible if idx not in blocked and devs[idx].soc_limit != 1
+            idx for idx in eligible
+            if idx not in blocked
+            and devs[idx].soc_limit != 1
+            and _direction_cap(devs[idx], 1) > 0
         ]
         return sorted(candidates, key=lambda idx: devs[idx].electric_level)
     if ac_mode == 2:
         candidates = [
-            idx for idx in eligible if idx not in blocked and devs[idx].soc_limit != 2
+            idx for idx in eligible
+            if idx not in blocked
+            and devs[idx].soc_limit != 2
+            and _direction_cap(devs[idx], 2) > 0
         ]
         return sorted(candidates, key=lambda idx: devs[idx].electric_level, reverse=True)
     return []
@@ -391,9 +410,9 @@ def _service_capacity(
     for idx in service_idx:
         dev = state.devices[idx]
         if ac_mode == 1:
-            total += min(max_power, dev.charge_max_limit or max_power)
+            total += _direction_cap(dev, 1)
         elif ac_mode == 2:
-            total += min(max_power, dev.inverse_max_power or max_power)
+            total += _direction_cap(dev, 2)
     return total
 
 
@@ -467,6 +486,14 @@ def _inactive(reason: str) -> AntiPingpongSplit:
         reserve_power_by_idx={},
         reason=reason,
     )
+
+
+def _direction_cap(dev, ac_mode: int) -> int:
+    if ac_mode == 1:
+        return max(0, _int(getattr(dev, "effective_charge_max_watts", 0)))
+    if ac_mode == 2:
+        return max(0, _int(getattr(dev, "effective_discharge_max_watts", 0)))
+    return 0
 
 
 def _int(value, default: int = 0) -> int:

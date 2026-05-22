@@ -20,6 +20,8 @@ class DeviceState:
     soc_limit: int = 0             # 0 = normal, 1 = charge limit, 2 = discharge limit
     charge_max_limit: int = 800    # W, per device
     inverse_max_power: int = 800   # W, per device
+    configured_charge_max_watts: Optional[int] = None
+    configured_discharge_max_watts: Optional[int] = None
     gridoff_mode: int = 2
     latest_power_cmd: int = 0      # Last power command (W) sent to this device
     latest_power_cmd_zero_ts: float = 0.0
@@ -35,6 +37,14 @@ class DeviceState:
     latest_get_included: bool = True
     standby_task: Optional[asyncio.Task] = None
     standby_device: bool = False
+
+    @property
+    def effective_charge_max_watts(self) -> int:
+        return _effective_cap(self.charge_max_limit, self.configured_charge_max_watts)
+
+    @property
+    def effective_discharge_max_watts(self) -> int:
+        return _effective_cap(self.inverse_max_power, self.configured_discharge_max_watts)
 
 
 @dataclass
@@ -129,3 +139,26 @@ class ProxyState:
 
     # Cached last combined GET response (returned when a device is temporarily down)
     last_get_response: Optional[dict] = None
+
+    def __post_init__(self) -> None:
+        if self.device_count and len(self.counter_missing) != self.device_count:
+            current = list(self.counter_missing)
+            self.counter_missing = (current + [0] * self.device_count)[: self.device_count]
+
+
+def _effective_cap(reported_cap: int, configured_cap: Optional[int]) -> int:
+    try:
+        reported = int(float(reported_cap))
+    except (TypeError, ValueError):
+        reported = 0
+    if reported <= 0:
+        reported = 800
+    if configured_cap is None:
+        return reported
+    try:
+        configured = int(float(configured_cap))
+    except (TypeError, ValueError):
+        return reported
+    if configured <= 0:
+        return reported
+    return min(reported, configured)

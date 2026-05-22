@@ -31,7 +31,7 @@ def epoch() -> int:
 def distribute_power(
     total: int,
     avail: list[float],
-    max_power: int,
+    max_power: int | list[int],
     balancing_factor: int = 5,
 ) -> list[int]:
     """
@@ -46,25 +46,25 @@ def distribute_power(
     Returns a list of integer watts, one per device in the *avail* list.
     """
     n = len(avail)
+    caps = _cap_list(max_power, n)
     avail = [max(0.0, a) for a in avail]
 
     if n == 0 or sum(avail) == 0:
         return [0] * n
 
-    weights = [a ** balancing_factor for a in avail]
+    weights = [(a ** balancing_factor) * max(0, caps[i]) for i, a in enumerate(avail)]
     total_weight = sum(weights)
     if total_weight == 0:
-        per = total // n
-        return [min(per, max_power)] * n
+        return split_equal_power(total, caps)
 
     power = [float(total) * (w / total_weight) for w in weights]
 
     for _ in range(n + 1):
         surplus = 0.0
         for i in range(n):
-            if power[i] > max_power:
-                surplus += power[i] - max_power
-                power[i] = float(max_power)
+            if power[i] > caps[i]:
+                surplus += power[i] - caps[i]
+                power[i] = float(caps[i])
 
         if surplus < 0.5:
             break
@@ -72,7 +72,7 @@ def distribute_power(
         while surplus >= 0.5:
             open_indices = [
                 i for i in range(n)
-                if power[i] < max_power and weights[i] > 0
+                if power[i] < caps[i] and weights[i] > 0
             ]
             total_open_weight = sum(weights[i] for i in open_indices)
             if total_open_weight <= 0:
@@ -81,7 +81,7 @@ def distribute_power(
             distributed = 0.0
             for i in open_indices:
                 addition = surplus * (weights[i] / total_open_weight)
-                actual = min(addition, float(max_power) - power[i])
+                actual = min(addition, float(caps[i]) - power[i])
                 power[i] += actual
                 distributed += actual
             if distributed < 0.5:
@@ -89,6 +89,88 @@ def distribute_power(
             surplus -= distributed
 
     return [math.floor(p) for p in power]
+
+
+def split_equal_power(total: int, max_power: int | list[int]) -> list[int]:
+    caps = _cap_list(max_power, len(max_power) if isinstance(max_power, list) else 1)
+    n = len(caps)
+    if n <= 0:
+        return []
+    remaining = max(0, int(total))
+    result = [0] * n
+    open_indices = [idx for idx, cap in enumerate(caps) if cap > 0]
+
+    while remaining > 0 and open_indices:
+        share = max(1, remaining // len(open_indices))
+        distributed = 0
+        next_open: list[int] = []
+        for idx in open_indices:
+            room = caps[idx] - result[idx]
+            if room <= 0:
+                continue
+            addition = min(share, room, remaining - distributed)
+            if addition <= 0:
+                next_open.append(idx)
+                continue
+            result[idx] += addition
+            distributed += addition
+            if result[idx] < caps[idx]:
+                next_open.append(idx)
+            if distributed >= remaining:
+                break
+        if distributed <= 0:
+            break
+        remaining -= distributed
+        open_indices = next_open
+    return result
+
+
+def _cap_list(max_power: int | list[int], n: int) -> list[int]:
+    if isinstance(max_power, list):
+        values = list(max_power)
+    else:
+        values = [max_power] * n
+    if len(values) < n:
+        values.extend([0] * (n - len(values)))
+    return [max(0, _int(value)) for value in values[:n]]
+
+
+def _direction_cap(dev, ac_mode: int) -> int:
+    if ac_mode == 1:
+        return max(0, _int(getattr(dev, "effective_charge_max_watts", 0)))
+    if ac_mode == 2:
+        return max(0, _int(getattr(dev, "effective_discharge_max_watts", 0)))
+    return 0
+
+
+def _device_has_direction_headroom(state: ProxyState, idx: int, ac_mode: int) -> bool:
+    if idx < 0 or idx >= len(state.devices):
+        return False
+    dev = state.devices[idx]
+    if getattr(dev, "soc_status", 0) == 1:
+        return False
+    if _direction_cap(dev, ac_mode) <= 0:
+        return False
+    min_soc_pct = state.min_soc / 10.0
+    soc_set_pct = state.soc_set / 10.0
+    if ac_mode == 1:
+        return dev.soc_limit != 1 and dev.electric_level < soc_set_pct
+    if ac_mode == 2:
+        return dev.soc_limit != 2 and dev.electric_level > min_soc_pct
+    return False
+
+
+def _rank_for_direction(state: ProxyState, ac_mode: int, indices: list[int]) -> list[int]:
+    if ac_mode == 2:
+        return sorted(indices, key=lambda idx: state.devices[idx].electric_level, reverse=True)
+    return sorted(indices, key=lambda idx: state.devices[idx].electric_level)
+
+
+def _int(value, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
 
 # ── Active-device count ────────────────────────────────────────────────────────
@@ -109,60 +191,63 @@ def calc_active_count(
     Uses hysteresis (prev count) to avoid rapid mode oscillation.
     """
     indices = eligible_indices if eligible_indices is not None else list(range(state.device_count))
-    n = len(indices)
-    devs = [state.devices[idx] for idx in indices]
-    min_soc_pct = state.min_soc / 10.0
-    prev = min(state.device_active_count, max(n, 1))
-
-    if n <= 0:
+    if not indices:
         return 0
 
-    if force_all or n == 1:
+    if force_all:
+        return len(indices)
+
+    usable = [
+        idx for idx in indices
+        if _device_has_direction_headroom(state, idx, ac_mode)
+    ]
+    selection = usable if usable else indices
+    ranked = _rank_for_direction(state, ac_mode, selection)
+    n = len(ranked)
+    prev = min(max(1, state.device_active_count), n)
+
+    if n == 1:
         return n
 
-    if n == 2:
-        if ac_mode == 1:
-            below = [d.electric_level < min_soc_pct for d in devs[:2]]
-            if sum(below) == 1:
-                return 1
-            if sum(d.soc_limit == 1 for d in devs[:2]) == 1:
-                return 1
-            high_soc = any(d.electric_level >= 98 for d in devs[:2])
-            avg_soc = math.ceil(sum(d.electric_level for d in devs[:2]) / 2)
-            if high_soc and avg_soc >= 98 - device_change_diff:
-                return 2
-        if ac_mode == 2:
-            below = [d.electric_level <= min_soc_pct for d in devs[:2]]
-            if sum(below) == 1:
-                return 1
-            if sum(d.soc_limit == 2 for d in devs[:2]) == 1:
-                return 1
-        if total_power == 0:
-            return prev
-        if total_power < lower:
-            return 1
-        if total_power > upper * 2:
-            return 2
-        if prev == 1 and total_power > upper:
-            return 2
-        if prev == 2 and total_power < lower:
-            return 1
-        return prev
-
-    # n == 3
-    dual_upper = upper * 2
-    dual_lower = lower * 2
     if total_power == 0:
         return prev
-    if total_power < lower:
-        return 1
-    if total_power > dual_upper:
-        return 3
-    if prev == 1 and total_power > upper:
-        return 2
-    if prev == 3 and total_power < dual_lower:
-        return 2
-    return prev
+
+    min_soc_pct = state.min_soc / 10.0
+    if ac_mode == 1:
+        below_min = [
+            idx for idx in ranked
+            if state.devices[idx].electric_level < min_soc_pct
+        ]
+        if below_min and len(below_min) < n:
+            return max(1, min(len(below_min), n))
+        high_soc = any(state.devices[idx].electric_level >= 98 for idx in ranked)
+        avg_soc = math.ceil(
+            sum(state.devices[idx].electric_level for idx in ranked) / n
+        )
+        if high_soc and avg_soc >= 98 - device_change_diff:
+            return n
+
+    caps = [_direction_cap(state.devices[idx], ac_mode) for idx in ranked]
+    max_cap = max(caps) if caps else 0
+    if max_cap <= 0:
+        return 0
+    upper_scale = max(0.0, upper / max_cap)
+    lower_scale = max(0.0, lower / max_cap)
+
+    active_count = prev
+    while active_count < n:
+        active_cap = sum(caps[:active_count])
+        if total_power <= active_cap * upper_scale:
+            break
+        active_count += 1
+
+    while active_count > 1:
+        smaller_cap = sum(caps[: active_count - 1])
+        if total_power >= smaller_cap * lower_scale:
+            break
+        active_count -= 1
+
+    return max(0, min(active_count, n))
 
 
 # ── Smooth transition ──────────────────────────────────────────────────────────

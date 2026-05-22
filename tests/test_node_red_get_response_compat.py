@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from zendure_proxy_config import Config
 from zendure_proxy_get_handler import _update_device_state, build_combined_response
+from zendure_proxy_ha_sensors import build_proxy_ha_sensors
 from zendure_proxy_power import now
 from zendure_proxy_state import DeviceState, ProxyState
 
@@ -205,6 +206,34 @@ def test_absent_devices_use_node_red_unknown_smart_mode_value() -> None:
     assert response["properties"]["smartMode_1"] == 1
     assert response["properties"]["smartMode_2"] == -1
     assert response["properties"]["smartMode_3"] == -1
+
+
+def test_ten_device_combined_response_and_proxy_sensors_use_ten_bit_masks() -> None:
+    results = [
+        device_response(idx, f"SN{idx}", properties={"inputLimit": 100})
+        for idx in range(1, 11)
+    ]
+    state = _state_for(results, active_idx=list(range(10)))
+    state.device_active_count = 10
+    state.latest_power_cmd = 1000
+    for dev in state.devices:
+        dev.latest_power_cmd = 100
+    state.devices[9].configured_charge_max_watts = 500
+
+    response = build_combined_response(
+        results,
+        state,
+        Config(device_ips=[f"ip{idx}" for idx in range(1, 11)]),
+    )
+    sensors = build_proxy_ha_sensors(response)
+
+    assert response["sn"] == "10x Zendure via PROXY"
+    assert response["sn_10"] == "SN10"
+    assert response["properties"]["activeDevice"] == 1023
+    assert response["properties"]["latestPowerCmd_10"] == 100
+    assert response["properties"]["effectiveChargeMax_10"] == 500
+    assert sensors["sensor.zendure_10_health"][0] == "Healthy"
+    assert sensors["sensor.zendure_actief_device"][0] == "Alle"
 
 
 def test_anti_pingpong_metadata_reports_net_and_device_power() -> None:

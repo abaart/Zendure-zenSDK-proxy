@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 
 from zendure_proxy import ZendureProxy, should_repeat_last_power
-from zendure_proxy_config import Config, is_placeholder_device_ip, load_config
+from zendure_proxy_config import Config, MAX_DEVICE_COUNT, is_placeholder_device_ip, load_config
 from zendure_proxy_device_client import DeviceClient, build_device_url
 from zendure_proxy_get_handler import execute_get
 from zendure_proxy_post_handler import execute_post
@@ -486,6 +486,48 @@ def test_zendure_request_timeout_is_user_configurable() -> None:
         await client.close()
 
     asyncio.run(run_client())
+
+
+def test_load_config_accepts_devices_list_and_numbered_slots_through_ten() -> None:
+    args = {
+        f"ip_zendure_{idx}": f"192.168.1.{100 + idx}"
+        for idx in range(1, MAX_DEVICE_COUNT + 1)
+    }
+    args["zendure_4_charge_max_watts"] = "650"
+    args["devices"] = [
+        {
+            "ip": "192.168.2.101",
+            "charge_max_watts": "500",
+            "discharge_max_watts": "550",
+        }
+    ]
+
+    cfg = load_config(args)
+
+    assert len(cfg.device_ips) == MAX_DEVICE_COUNT
+    assert cfg.device_ips[0] == "192.168.2.101"
+    assert cfg.device_ips[1] == "192.168.1.102"
+    assert cfg.device_ips[9] == "192.168.1.110"
+    assert cfg.device_power_limits[0].charge_max_watts == 500
+    assert cfg.device_power_limits[0].discharge_max_watts == 550
+    assert cfg.device_power_limits[3].charge_max_watts == 650
+
+
+def test_load_config_reports_invalid_device_caps_and_overflow() -> None:
+    cfg = load_config(
+        {
+            "ip_zendure_1": "192.168.1.101",
+            "zendure_1_charge_max_watts": "0",
+            "zendure_1_discharge_max_watts": "bad",
+            "devices": [{"ip": f"192.168.2.{idx}"} for idx in range(1, 12)],
+        }
+    )
+
+    assert len(cfg.device_ips) == MAX_DEVICE_COUNT
+    assert cfg.device_ips[0] == "192.168.2.1"
+    assert any("zendure_1_charge_max_watts" in warning for warning in cfg.config_warnings)
+    assert any("zendure_1_discharge_max_watts" in warning for warning in cfg.config_warnings)
+    assert any("max device count is 10" in warning for warning in cfg.config_warnings)
 
 
 def test_connection_options_are_user_configurable() -> None:

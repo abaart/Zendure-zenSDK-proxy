@@ -764,7 +764,7 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(proxy._state.counter_serial_missing_drop, 0)
         self.assertEqual(proxy._state.counter_post_received, 0)
         self.assertEqual(proxy._state.counter_post_replies, 0)
-        self.assertEqual(proxy._state.counter_missing, [0, 0, 0])
+        self.assertEqual(proxy._state.counter_missing, [0, 0])
 
     def test_diagnostics_warnings_show_mismatched_limits_and_stale_get(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)

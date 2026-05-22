@@ -14,7 +14,7 @@ For Home Assistant automations, the proxy also registers AppDaemon API endpoints
 - `GET /api/appdaemon/zendure_proxy_report`
 - `POST /api/appdaemon/zendure_proxy_write`
 
-The proxy talks to one, two, or three Zendure devices and returns one combined response to Home Assistant.
+The proxy talks to 1 through 10 Zendure devices and returns one combined response to Home Assistant. Optional `charge_max_watts` and `discharge_max_watts` settings can cap a device below the hardware limits reported by `chargeMaxLimit` and `inverseMaxPower`.
 
 The proxy also writes its own rotating logfile and exposes a small AppDaemon UI log page:
 
@@ -39,7 +39,7 @@ Metrics are also published as Home Assistant sensors by default.
 5. Install `Zendure zenSDK Proxy` from HACS.
 6. Set `production_mode: true` under the global `appdaemon:` section in AppDaemon `appdaemon.yaml`.
 7. Copy the `zendure_proxy` block from `examples/apps.yaml` into your AppDaemon `apps.yaml`.
-8. Change `ip_zendure_1`, `ip_zendure_2`, and `ip_zendure_3` in AppDaemon `apps.yaml`.
+8. Change the `devices:` list in AppDaemon `apps.yaml`. The old keys `ip_zendure_1` through `ip_zendure_10` also work.
 9. Restart AppDaemon.
 
 HACS downloads the app code to the Home Assistant configuration directory under `appdaemon/apps/Zendure-zenSDK-proxy/`.
