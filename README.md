@@ -114,12 +114,31 @@ In gewone taal:
   bruikbare response oplevert. Voorbeelden zijn: geen antwoord binnen
   `zendure_request_timeout`, standaard 60 seconden, een verbroken verbinding,
   een HTTP fout, of een response die de proxy niet kan verwerken.
-- Wanneer `proxyHealth.degradedDevices` een nieuw slot meldt, publiceert
-  `ZendureProxy._publish_degraded_transition_sensors(...)` direct
+- Wanneer een Zendure health-state verandert, publiceert
+  `ZendureProxy._publish_health_transition_sensors(...)` direct
   `sensor.proxy_zendure_pool_healthy`, `sensor.zendure_actief_device`,
   `sensor.vermogensopdracht`, en de `sensor.zendure_N_*` sensors voor dat
-  slot. Home Assistant ziet de zichtbare degraded-status zonder te wachten op
-  de volgende REST sensorupdate.
+  slot. Dit geldt voor `Healthy` naar `Degraded`, `Degraded` naar `Dead`,
+  `Degraded` naar `Healthy`, en `Dead` naar `Healthy`. Home Assistant ziet de
+  zichtbare health-status zonder te wachten op de volgende REST sensorupdate.
+- `ZendureProxy._publish_health_transition_sensors(...)` logt
+  `Zendure pool degraded`, `Zendure pool dead`, of
+  `Zendure pool recovered` met slot, serienummer, IP-adres, vorige
+  health-state, en de laatste GET-fout wanneer die fout beschikbaar is.
+- Na een AppDaemon restart schrijft
+  `ZendureProxy._publish_health_transition_sensors(...)` de zichtbare
+  health-sensors één keer met de huidige proxy response. Daardoor blijft een
+  oude Home Assistant state zoals `Degraded` niet staan wanneer de eerste nieuwe
+  proxy response alweer `Healthy` is.
+- `ZendureProxy.initialize(...)` plant
+  `ZendureProxy._refresh_proxy_ha_sensors(...)` met
+  `run_every(..., "now", 300)`. De proxy haalt bij AppDaemon startup en daarna
+  elke 300 seconden een nieuwe Zendure response op met `execute_get(...)` en
+  publiceert daarna de proxy response sensors met
+  `ZendureProxy._publish_report_sensors(...)`. De periodieke refresh forceert
+  `sensor.proxy_zendure_pool_healthy`, `sensor.zendure_actief_device`,
+  `sensor.vermogensopdracht`, en de `sensor.zendure_N_*` sensors voor alle
+  geconfigureerde slots, ook wanneer de health-state gelijk blijft.
 - Een `Degraded` Zendure krijgt geen POST opdrachten meer. `execute_post(...)`
   verdeelt de volledige vermogensopdracht van Home Assistant over de gezonde
   Zendures. Bij P1-sturing zit het werkelijke laad- of ontlaadvermogen van een

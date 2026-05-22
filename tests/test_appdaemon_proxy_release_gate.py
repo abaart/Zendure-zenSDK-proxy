@@ -144,7 +144,50 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             written_states["sensor.zendure_proxy_versie"][1]["zendure_proxy_managed"]
         )
 
-    async def test_degraded_transition_updates_existing_health_sensors(self) -> None:
+    async def test_publish_proxy_ha_sensors_continues_after_set_state_error(
+        self,
+    ) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = types.SimpleNamespace(
+            proxy_ha_sensors_enabled=True,
+            proxy_ha_sensors_skip_existing=False,
+            proxy_ha_sensors_mqtt_discovery_enabled=False,
+        )
+        proxy._mqtt_api = None
+        proxy._mqtt_sensor_error_logged = False
+        proxy._proxy_ha_sensor_owned_entities = set()
+        written_entities: set[str] = set()
+        log_lines: list[tuple[str, str]] = []
+
+        def get_state(entity_id: str, attribute=None):
+            if entity_id == "input_text.zendure_2400_ac_batterij_volgorde":
+                return None
+            return None
+
+        def set_state(entity_id: str, state, attributes, replace, check_existence):
+            if entity_id == "sensor.zendure_1_health":
+                raise RuntimeError("set_state failed")
+            written_entities.add(entity_id)
+            return None
+
+        proxy.get_state = get_state
+        proxy.set_state = set_state
+        proxy._proxy_log = lambda message, level="INFO", **_kwargs: log_lines.append(
+            (message, level)
+        )
+
+        await proxy._publish_proxy_ha_sensors({"properties": {}, "packData": []})
+
+        self.assertNotIn("sensor.zendure_1_health", written_entities)
+        self.assertIn("sensor.zendure_proxy_versie", written_entities)
+        self.assertEqual(len(log_lines), 1)
+        self.assertEqual(log_lines[0][1], "WARNING")
+        self.assertIn(
+            "Proxy sensor publish failed: entity_id=sensor.zendure_1_health",
+            log_lines[0][0],
+        )
+
+    async def test_first_health_sync_updates_existing_healthy_sensors(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
         proxy._cfg = types.SimpleNamespace(
             proxy_ha_sensors_enabled=True,
@@ -154,7 +197,80 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         proxy._mqtt_api = None
         proxy._mqtt_sensor_error_logged = False
         proxy._proxy_ha_sensor_owned_entities = set()
-        proxy._proxy_ha_degraded_slots = frozenset()
+        written_states: dict[str, tuple[str, dict, bool]] = {}
+        log_lines: list[tuple[str, str]] = []
+
+        def get_state(entity_id: str, attribute=None):
+            if entity_id == "input_text.zendure_2400_ac_batterij_volgorde":
+                return None
+            return {
+                "state": "Degraded",
+                "attributes": {"friendly_name": "Existing REST sensor"},
+            }
+
+        def set_state(entity_id: str, state, attributes, replace, check_existence):
+            written_states[entity_id] = (state, attributes, replace)
+            return None
+
+        proxy.get_state = get_state
+        proxy.set_state = set_state
+        proxy._proxy_log = lambda message, level="INFO", **_kwargs: log_lines.append(
+            (message, level)
+        )
+        response = {
+            "proxyVersion": "test",
+            "packData": [],
+            "properties": {
+                "sn_1": "SN1",
+                "sn_2": "SN2",
+                "ipAddress_1": "ip1",
+                "ipAddress_2": "ip2",
+                "electricLevel_1": 54,
+                "electricLevel_2": 55,
+            },
+            "proxyHealth": {
+                "configuredCount": 2,
+                "healthyCount": 2,
+                "unhealthyCount": 0,
+                "excludedCount": 0,
+                "recoveringCount": 0,
+                "degradedCount": 0,
+                "deadCount": 0,
+                "unhealthyDevices": [],
+                "excludedDevices": [],
+                "recoveringDevices": [],
+                "degradedDevices": [],
+                "deadDevices": [],
+            },
+        }
+
+        await proxy._publish_health_transition_sensors(response)
+
+        self.assertEqual(
+            written_states["sensor.proxy_zendure_pool_healthy"][0],
+            "Healthy",
+        )
+        self.assertEqual(written_states["sensor.zendure_1_health"][0], "Healthy")
+        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Healthy")
+        self.assertFalse(written_states["sensor.proxy_zendure_pool_healthy"][2])
+        self.assertNotIn(
+            "zendure_proxy_managed",
+            written_states["sensor.proxy_zendure_pool_healthy"][1],
+        )
+        self.assertEqual(log_lines, [])
+
+    async def test_health_transition_updates_existing_health_sensors_until_recovered(
+        self,
+    ) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = types.SimpleNamespace(
+            proxy_ha_sensors_enabled=True,
+            proxy_ha_sensors_skip_existing=True,
+            proxy_ha_sensors_mqtt_discovery_enabled=False,
+        )
+        proxy._mqtt_api = None
+        proxy._mqtt_sensor_error_logged = False
+        proxy._proxy_ha_sensor_owned_entities = set()
         written_states: dict[str, tuple[str, dict]] = {}
         log_lines: list[tuple[str, str]] = []
 
@@ -210,7 +326,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             },
         }
 
-        await proxy._publish_degraded_transition_sensors(response)
+        await proxy._publish_health_transition_sensors(response)
 
         self.assertEqual(
             written_states["sensor.proxy_zendure_pool_healthy"][0],
@@ -221,7 +337,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             written_states["sensor.zendure_2_laadpercentage"][0],
             "unavailable",
         )
-        self.assertNotIn("sensor.zendure_1_health", written_states)
+        self.assertEqual(written_states["sensor.zendure_1_health"][0], "Healthy")
         self.assertNotIn(
             "zendure_proxy_managed",
             written_states["sensor.proxy_zendure_pool_healthy"][1],
@@ -231,13 +347,122 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(log_lines[0][1], "WARNING")
         self.assertIn("Zendure pool degraded: slot=2", log_lines[0][0])
         self.assertIn("serial=SN2", log_lines[0][0])
+        self.assertIn("previous_health_state=Healthy", log_lines[0][0])
         self.assertIn("last_get_error=GET returned no response", log_lines[0][0])
 
         written_states.clear()
-        await proxy._publish_degraded_transition_sensors(response)
+        await proxy._publish_health_transition_sensors(response)
 
         self.assertEqual(written_states, {})
         self.assertEqual(len(log_lines), 1)
+
+        await proxy._publish_health_transition_sensors(response, force_all=True)
+
+        self.assertEqual(
+            written_states["sensor.proxy_zendure_pool_healthy"][0],
+            "Degraded",
+        )
+        self.assertEqual(written_states["sensor.zendure_1_health"][0], "Healthy")
+        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Degraded")
+        self.assertEqual(len(log_lines), 1)
+        written_states.clear()
+
+        dead_health_item = {
+            **health_item,
+            "lastSuccessfulGetAgeSeconds": 2000.0,
+            "dead": True,
+        }
+        dead_response = {
+            "proxyVersion": "test",
+            "packData": [],
+            "properties": {
+                "sn_1": "SN1",
+                "sn_2": "SN2",
+                "ipAddress_1": "ip1",
+                "ipAddress_2": "ip2",
+                "electricLevel_2": "unavailable",
+                "latestPowerCmd_2": "unavailable",
+            },
+            "proxyHealth": {
+                "configuredCount": 2,
+                "healthyCount": 1,
+                "unhealthyCount": 1,
+                "excludedCount": 1,
+                "recoveringCount": 0,
+                "degradedCount": 0,
+                "deadCount": 1,
+                "unhealthyDevices": [dead_health_item],
+                "excludedDevices": [dead_health_item],
+                "recoveringDevices": [],
+                "degradedDevices": [],
+                "deadDevices": [dead_health_item],
+            },
+        }
+
+        await proxy._publish_health_transition_sensors(dead_response)
+
+        self.assertEqual(
+            written_states["sensor.proxy_zendure_pool_healthy"][0],
+            "Degraded",
+        )
+        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Dead")
+        self.assertEqual(
+            written_states["sensor.zendure_2_laadpercentage"][0],
+            "unavailable",
+        )
+        self.assertEqual(len(log_lines), 2)
+        self.assertEqual(log_lines[1][1], "WARNING")
+        self.assertIn("Zendure pool dead: slot=2", log_lines[1][0])
+        self.assertIn("previous_health_state=Degraded", log_lines[1][0])
+        written_states.clear()
+
+        healthy_response = {
+            "proxyVersion": "test",
+            "packData": [],
+            "properties": {
+                "sn_1": "SN1",
+                "sn_2": "SN2",
+                "ipAddress_1": "ip1",
+                "ipAddress_2": "ip2",
+                "electricLevel_2": 55,
+                "latestPowerCmd_2": 0,
+            },
+            "proxyHealth": {
+                "configuredCount": 2,
+                "healthyCount": 2,
+                "unhealthyCount": 0,
+                "excludedCount": 0,
+                "recoveringCount": 0,
+                "degradedCount": 0,
+                "deadCount": 0,
+                "unhealthyDevices": [],
+                "excludedDevices": [],
+                "recoveringDevices": [],
+                "degradedDevices": [],
+                "deadDevices": [],
+            },
+        }
+
+        await proxy._publish_health_transition_sensors(healthy_response)
+
+        self.assertEqual(
+            written_states["sensor.proxy_zendure_pool_healthy"][0],
+            "Healthy",
+        )
+        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Healthy")
+        self.assertEqual(written_states["sensor.zendure_2_laadpercentage"][0], "55")
+        self.assertEqual(len(log_lines), 3)
+        self.assertEqual(log_lines[2][1], "INFO")
+        self.assertIn("Zendure pool recovered: slot=2", log_lines[2][0])
+        self.assertIn("previous_health_state=Dead", log_lines[2][0])
+
+        written_states.clear()
+        await proxy._publish_health_transition_sensors(dead_response)
+
+        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Dead")
+        self.assertEqual(len(log_lines), 4)
+        self.assertIn("Zendure pool dead: slot=2", log_lines[3][0])
+        self.assertIn("previous_health_state=Healthy", log_lines[3][0])
 
     async def test_publish_proxy_mqtt_sensor_accepts_async_mqtt_publish(self) -> None:
         published: list[tuple[str, str, bool]] = []
@@ -276,6 +501,110 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             published[2][0],
             "zendure_proxy/sensor/zendure_2_serienummer/attributes",
         )
+
+    async def test_refresh_proxy_ha_sensors_fetches_devices_and_publishes_report(
+        self,
+    ) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(device_ips=["ip1"])
+        proxy._state = ProxyState(
+            device_count=1,
+            devices=[DeviceState(ip="ip1")],
+            startup_ts=100.0,
+        )
+        proxy._clients = [_MutableGetClient(_device(1, "SN1"))]
+        proxy._metrics = _FakeMetrics()
+        proxy._proxy_ha_sensor_refresh_in_progress = False
+        published_responses: list[tuple[dict, bool]] = []
+        standby_checks = 0
+
+        async def publish_report_sensors(
+            response: dict,
+            *,
+            force_health_sensor_refresh: bool = False,
+        ) -> None:
+            published_responses.append((response, force_health_sensor_refresh))
+
+        async def standby_check(_kwargs=None) -> None:
+            nonlocal standby_checks
+            standby_checks += 1
+
+        proxy._publish_report_sensors = publish_report_sensors
+        proxy._standby_check = standby_check
+        proxy._mark_passive_zero_timestamps = lambda: None
+        proxy._proxy_log = lambda *args, **kwargs: None
+
+        await proxy._refresh_proxy_ha_sensors()
+
+        self.assertEqual(len(published_responses), 1)
+        self.assertEqual(published_responses[0][0]["proxyHealth"]["reason"], "fresh")
+        self.assertTrue(published_responses[0][1])
+        self.assertEqual(proxy._state.devices[0].sn, "SN1")
+        self.assertGreater(proxy._state.last_upstream_get_ts, 0)
+        self.assertFalse(proxy._state.get_refresh_in_progress)
+        self.assertFalse(proxy._proxy_ha_sensor_refresh_in_progress)
+        self.assertEqual(standby_checks, 1)
+
+    async def test_refresh_proxy_ha_sensors_skips_overlap(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(device_ips=["ip1"])
+        proxy._proxy_ha_sensor_refresh_in_progress = True
+        proxy._publish_report_sensors = lambda *_args, **_kwargs: self.fail(
+            "_publish_report_sensors should not be called"
+        )
+
+        await proxy._refresh_proxy_ha_sensors()
+
+    async def test_initialize_schedules_proxy_sensor_refresh_every_300_seconds(
+        self,
+    ) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy.args = {
+            "ip_zendure_1": "ip1",
+            "proxy_ha_sensors_enabled": True,
+        }
+        proxy._create_file_logger = lambda: None
+        proxy._get_mqtt_api = lambda: None
+        proxy._restore_metrics_counters_from_ha = _noop_record_depths
+        proxy._start_server = _noop_record_depths
+        proxy.log = lambda *args, **kwargs: None
+        run_every_calls: list[tuple[object, str, int]] = []
+
+        async def register_endpoint(*args, **kwargs):
+            return f"endpoint-{len(args)}"
+
+        async def register_route(*args, **kwargs):
+            return f"route-{len(args)}"
+
+        async def run_every(callback, start, interval):
+            run_every_calls.append((callback, start, interval))
+            return f"timer-{interval}"
+
+        proxy.register_endpoint = register_endpoint
+        proxy.register_route = register_route
+        proxy.run_every = run_every
+
+        class FakeDeviceClient:
+            def __init__(self, *args, **kwargs):
+                return None
+
+            async def close(self):
+                return None
+
+        with patch("zendure_proxy.DeviceClient", FakeDeviceClient):
+            await proxy.initialize()
+
+        proxy._processor_task.cancel()
+        try:
+            await proxy._processor_task
+        except asyncio.CancelledError:
+            pass
+
+        self.assertIn(
+            (proxy._refresh_proxy_ha_sensors, "now", 300),
+            run_every_calls,
+        )
+        self.assertFalse(hasattr(proxy, "_proxy_ha_degraded_slots"))
 
     async def test_report_request_returns_cache_after_ha_get_timeout(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
@@ -380,7 +709,12 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         proxy._queue = queue
         proxy._metrics = _FakeMetrics()
-        proxy._publish_proxy_ha_sensors = _noop_publish
+        published_reasons: list[str] = []
+
+        async def publish_report_sensors(response: dict) -> None:
+            published_reasons.append(response["proxyHealth"]["reason"])
+
+        proxy._publish_report_sensors = publish_report_sensors
         proxy._record_incoming_depths = _noop_record_depths
         proxy._debug_capture_payload = lambda *args, **kwargs: None
 
@@ -390,6 +724,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(queue.enqueue_get_calls, 0)
         self.assertEqual(data["proxyHealth"]["reason"], "rate_limited")
         self.assertTrue(data["proxyHealth"]["servedFromCache"])
+        self.assertEqual(published_reasons, ["rate_limited"])
 
     async def test_rapid_report_requests_use_one_upstream_get_per_window(self) -> None:
         clock = _FakeClock(base=1000.0, step=0.1)
@@ -1217,7 +1552,7 @@ class _FakeMetrics:
         return None
 
 
-async def _noop_publish(_response: dict) -> None:
+async def _noop_publish(_response: dict, **_kwargs) -> None:
     return None
 
 

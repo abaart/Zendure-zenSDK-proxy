@@ -63,7 +63,8 @@ class ZendureProxy(hass.Hass):
         self._mqtt_sensor_error_logged = False
         self._metrics = MetricsRegistry(len(self._cfg.device_ips))
         self._proxy_ha_sensor_owned_entities: set[str] = set()
-        self._proxy_ha_degraded_slots: frozenset[int] = frozenset()
+        self._proxy_ha_health_states: dict[int, str] | None = None
+        self._proxy_ha_sensor_refresh_in_progress = False
         await self._restore_metrics_counters_from_ha()
 
         self._clients: list[DeviceClient] = [
@@ -93,7 +94,8 @@ class ZendureProxy(hass.Hass):
         self._queue = RequestQueue()
 
         self._processor_task = asyncio.ensure_future(self._processor())
-        asyncio.ensure_future(self._init_serial_numbers())
+        if not self._cfg.proxy_ha_sensors_enabled:
+            asyncio.ensure_future(self._init_serial_numbers())
 
         self._report_endpoint_handle = await self.register_endpoint(
             self._api_report, "zendure_proxy_report"
@@ -118,6 +120,12 @@ class ZendureProxy(hass.Hass):
                 self._publish_metrics_sensors,
                 "now",
                 self._cfg.metrics_ha_sensors_interval,
+            )
+        if self._cfg.proxy_ha_sensors_enabled and self._cfg.device_ips:
+            self._proxy_ha_sensor_refresh_timer = await self.run_every(
+                self._refresh_proxy_ha_sensors,
+                "now",
+                300,
             )
         if len(self._cfg.device_ips) > 1:
             self._standby_check_timer = await self.run_every(
@@ -166,6 +174,11 @@ class ZendureProxy(hass.Hass):
             await self.cancel_timer(self._standby_check_timer, silent=True)
         if getattr(self, "_metrics_sensor_timer", None):
             await self.cancel_timer(self._metrics_sensor_timer, silent=True)
+        if getattr(self, "_proxy_ha_sensor_refresh_timer", None):
+            await self.cancel_timer(
+                self._proxy_ha_sensor_refresh_timer,
+                silent=True,
+            )
         if getattr(self, "_diagnostics_route_handle", None):
             await self.deregister_route(self._diagnostics_route_handle)
         if getattr(self, "_metrics_route_handle", None):
@@ -552,15 +565,66 @@ class ZendureProxy(hass.Hass):
                 .title(),
                 **attributes,
             }
-            await self._resolve_appdaemon_result(
-                self.set_state(
-                    entity_id,
-                    state=self._ha_sensor_state(state),
-                    attributes=sensor_attributes,
-                    replace=True,
-                    check_existence=False,
+            try:
+                await self._resolve_appdaemon_result(
+                    self.set_state(
+                        entity_id,
+                        state=self._ha_sensor_state(state),
+                        attributes=sensor_attributes,
+                        replace=True,
+                        check_existence=False,
+                    )
                 )
+            except Exception as exc:
+                self._proxy_log(
+                    "Metrics sensor publish failed: "
+                    f"entity_id={entity_id} error={exc}",
+                    level="WARNING",
+                )
+
+    async def _publish_report_sensors(
+        self,
+        response: dict,
+        *,
+        force_health_sensor_refresh: bool = False,
+    ) -> None:
+        await self._publish_health_transition_sensors(
+            response,
+            force_all=force_health_sensor_refresh,
+        )
+        await self._publish_proxy_ha_sensors(response)
+
+    async def _refresh_proxy_ha_sensors(self, _kwargs=None) -> None:
+        if not self._cfg.proxy_ha_sensors_enabled or not self._cfg.device_ips:
+            return
+        if self._proxy_ha_sensor_refresh_in_progress:
+            return
+
+        self._proxy_ha_sensor_refresh_in_progress = True
+        self._state.get_refresh_in_progress = True
+        self._state.last_upstream_get_ts = now()
+        try:
+            response = await execute_get(
+                self._clients,
+                self._state,
+                self._cfg,
+                self._proxy_log,
+                metrics=self._metrics,
             )
+            self._mark_passive_zero_timestamps()
+            await self._standby_check()
+            await self._publish_report_sensors(
+                response,
+                force_health_sensor_refresh=True,
+            )
+        except Exception as exc:
+            self._proxy_log(
+                f"Proxy sensor refresh failed: error={exc}",
+                level="WARNING",
+            )
+        finally:
+            self._state.get_refresh_in_progress = False
+            self._proxy_ha_sensor_refresh_in_progress = False
 
     async def _publish_proxy_ha_sensors(
         self,
@@ -585,84 +649,137 @@ class ZendureProxy(hass.Hass):
         ).items():
             if entity_ids is not None and entity_id not in entity_ids:
                 continue
-            existing_state = await self._get_entity_state(entity_id)
-            owned = self._entity_is_proxy_managed(entity_id, existing_state)
-            if (
-                self._cfg.proxy_ha_sensors_skip_existing
-                and not force_existing_entities
-                and entity_id not in self._proxy_ha_sensor_owned_entities
-                and existing_state is not None
-                and not owned
-            ):
-                continue
-            transient_existing_update = (
-                force_existing_entities
-                and existing_state is not None
-                and not owned
-            )
-            if self._mqtt_api is not None and not transient_existing_update:
-                try:
-                    await self._publish_proxy_mqtt_sensor(
-                        entity_id, state, attributes, response, updated_at
-                    )
-                    self._proxy_ha_sensor_owned_entities.add(entity_id)
+            try:
+                existing_state = await self._get_entity_state(entity_id)
+                owned = self._entity_is_proxy_managed(entity_id, existing_state)
+                if (
+                    self._cfg.proxy_ha_sensors_skip_existing
+                    and not force_existing_entities
+                    and entity_id not in self._proxy_ha_sensor_owned_entities
+                    and existing_state is not None
+                    and not owned
+                ):
                     continue
-                except Exception as exc:
-                    if not self._mqtt_sensor_error_logged:
-                        self._proxy_log(
-                            "MQTT discovery publish failed for Zendure proxy sensors; "
-                            f"using AppDaemon set_state fallback: {exc}",
-                            level="WARNING",
-                        )
-                        self._mqtt_sensor_error_logged = True
-            await self._resolve_appdaemon_result(
-                self.set_state(
-                    entity_id,
-                    state=self._ha_sensor_state(state),
-                    attributes={
-                        **attributes,
-                        "proxy_updated_at": updated_at,
-                        **(
-                            {}
-                            if transient_existing_update
-                            else {"zendure_proxy_managed": True}
-                        ),
-                    },
-                    replace=True,
-                    check_existence=False,
+                transient_existing_update = (
+                    force_existing_entities
+                    and existing_state is not None
+                    and not owned
                 )
-            )
-            if not transient_existing_update:
-                self._proxy_ha_sensor_owned_entities.add(entity_id)
+                if self._mqtt_api is not None and not transient_existing_update:
+                    try:
+                        await self._publish_proxy_mqtt_sensor(
+                            entity_id, state, attributes, response, updated_at
+                        )
+                        self._proxy_ha_sensor_owned_entities.add(entity_id)
+                        continue
+                    except Exception as exc:
+                        if not self._mqtt_sensor_error_logged:
+                            self._proxy_log(
+                                "MQTT discovery publish failed for Zendure proxy sensors; "
+                                f"using AppDaemon set_state fallback: {exc}",
+                                level="WARNING",
+                            )
+                            self._mqtt_sensor_error_logged = True
+                await self._resolve_appdaemon_result(
+                    self.set_state(
+                        entity_id,
+                        state=self._ha_sensor_state(state),
+                        attributes={
+                            **attributes,
+                            "proxy_updated_at": updated_at,
+                            **(
+                                {}
+                                if transient_existing_update
+                                else {"zendure_proxy_managed": True}
+                            ),
+                        },
+                        replace=not transient_existing_update,
+                        check_existence=False,
+                    )
+                )
+                if not transient_existing_update:
+                    self._proxy_ha_sensor_owned_entities.add(entity_id)
+            except Exception as exc:
+                self._proxy_log(
+                    "Proxy sensor publish failed: "
+                    f"entity_id={entity_id} error={exc}",
+                    level="WARNING",
+                )
 
-    async def _publish_degraded_transition_sensors(self, response: dict) -> None:
-        current_slots = _degraded_slots(response)
-        previous_slots = getattr(self, "_proxy_ha_degraded_slots", frozenset())
-        newly_degraded_slots = current_slots - previous_slots
-        self._proxy_ha_degraded_slots = current_slots
-        if not newly_degraded_slots:
+    async def _publish_health_transition_sensors(
+        self,
+        response: dict,
+        *,
+        force_all: bool = False,
+    ) -> None:
+        current_states = _health_transition_states(response)
+        previous_states = getattr(self, "_proxy_ha_health_states", None)
+        self._proxy_ha_health_states = current_states
+
+        if previous_states is None:
+            changed_slots = frozenset(current_states)
+        else:
+            changed_slots = _changed_health_slots(previous_states, current_states)
+        refresh_slots = frozenset(current_states) if force_all else changed_slots
+        if not refresh_slots:
             return
 
-        for slot in sorted(newly_degraded_slots):
-            item = _health_item_for_slot(response, slot)
-            serial = item.get("serialNumber") or f"slot-{slot}"
-            ip_address = item.get("ipAddress") or "unknown"
-            last_error = item.get("lastGetError") or "unknown"
-            age = item.get("lastSuccessfulGetAgeSeconds")
-            self._proxy_log(
-                "Zendure pool degraded: "
-                f"slot={slot} serial={serial} ip={ip_address} "
-                f"last_successful_get_age_seconds={age} "
-                f"last_get_error={last_error}",
-                level="WARNING",
+        if changed_slots:
+            self._log_health_transitions(
+                response,
+                changed_slots,
+                current_states,
+                previous_states,
             )
 
-        entity_ids = _degraded_transition_entity_ids(newly_degraded_slots)
+        entity_ids = _health_transition_entity_ids(refresh_slots)
         await self._publish_proxy_ha_sensors(
             response,
             entity_ids=entity_ids,
             force_existing_entities=True,
         )
+
+    def _log_health_transitions(
+        self,
+        response: dict,
+        changed_slots: frozenset[int],
+        current_states: dict[int, str],
+        previous_states: dict[int, str] | None,
+    ) -> None:
+        for slot in sorted(changed_slots):
+            previous_state = (
+                previous_states.get(slot, "Healthy")
+                if previous_states is not None
+                else "Healthy"
+            )
+            current_state = current_states.get(slot, "Healthy")
+            if previous_state == current_state:
+                continue
+
+            item = _health_item_for_slot(response, slot)
+            serial = item.get("serialNumber") or f"slot-{slot}"
+            ip_address = item.get("ipAddress") or "unknown"
+            last_error = item.get("lastGetError") or "unknown"
+            age = item.get("lastSuccessfulGetAgeSeconds")
+            if current_state == "Healthy":
+                self._proxy_log(
+                    "Zendure pool recovered: "
+                    f"slot={slot} serial={serial} ip={ip_address} "
+                    f"previous_health_state={previous_state}",
+                    level="INFO",
+                )
+                continue
+
+            level = "WARNING"
+            label = "dead" if current_state == "Dead" else "degraded"
+            self._proxy_log(
+                f"Zendure pool {label}: "
+                f"slot={slot} serial={serial} ip={ip_address} "
+                f"previous_health_state={previous_state} "
+                f"last_successful_get_age_seconds={age} "
+                f"last_get_error={last_error}",
+                level=level,
+            )
 
     async def _publish_proxy_mqtt_sensor(
         self,
@@ -853,7 +970,7 @@ class ZendureProxy(hass.Hass):
                     refresh_in_progress=self._state.get_refresh_in_progress,
                     current_ts=request_ts,
                 )
-                await self._publish_proxy_ha_sensors(data)
+                await self._publish_report_sensors(data)
                 self._debug_capture_payload("GET", "To Home Assistant", data)
                 return data, status
 
@@ -867,7 +984,7 @@ class ZendureProxy(hass.Hass):
                 status = 200
                 self._mark_passive_zero_timestamps()
                 await self._standby_check()
-                await self._publish_proxy_ha_sensors(data)
+                await self._publish_report_sensors(data)
                 self._debug_capture_payload("GET", "To Home Assistant", data)
                 return data, status
             except asyncio.TimeoutError:
@@ -884,7 +1001,7 @@ class ZendureProxy(hass.Hass):
                         refresh_in_progress=True,
                         current_ts=now(),
                     )
-                    await self._publish_proxy_ha_sensors(data)
+                    await self._publish_report_sensors(data)
                     self._debug_capture_payload("GET", "To Home Assistant", data)
                     return data, status
                 status = 504
@@ -902,7 +1019,7 @@ class ZendureProxy(hass.Hass):
                         refresh_in_progress=self._state.get_refresh_in_progress,
                         current_ts=now(),
                     )
-                    await self._publish_proxy_ha_sensors(data)
+                    await self._publish_report_sensors(data)
                     return data, status
                 status = 502
                 return {"error": str(exc)}, status
@@ -1029,8 +1146,7 @@ class ZendureProxy(hass.Hass):
                         self._state.get_refresh_in_progress = False
                         self._mark_passive_zero_timestamps()
                         await self._standby_check()
-                        await self._publish_degraded_transition_sensors(get_response)
-                        await self._publish_proxy_ha_sensors(get_response)
+                        await self._publish_report_sensors(get_response)
                         for fut in gets:
                             if not fut.done():
                                 fut.set_result(get_response)
@@ -1126,34 +1242,71 @@ class ZendureProxy(hass.Hass):
         return all(d.sn for d in self._state.devices)
 
 
-def _degraded_slots(response: dict) -> frozenset[int]:
+def _health_transition_states(response: dict) -> dict[int, str]:
+    health = response.get("proxyHealth") or {}
+    configured_count = _int(health.get("configuredCount", 3), 3)
+    degraded_slots = _health_slots(response, "degradedDevices")
+    unhealthy_slots = _health_slots(response, "unhealthyDevices")
+    dead_slots = _health_slots(response, "deadDevices")
+    states: dict[int, str] = {}
+    for slot in range(1, max(0, configured_count) + 1):
+        if slot in dead_slots:
+            states[slot] = "Dead"
+        elif slot in degraded_slots or slot in unhealthy_slots:
+            states[slot] = "Degraded"
+        else:
+            states[slot] = "Healthy"
+    return states
+
+
+def _health_slots(response: dict, key: str) -> frozenset[int]:
     health = response.get("proxyHealth") or {}
     slots: set[int] = set()
-    for item in health.get("degradedDevices", []) or []:
-        try:
-            slot = int(item.get("slot", 0))
-        except (AttributeError, TypeError, ValueError):
-            slot = 0
+    for item in health.get(key, []) or []:
+        if not isinstance(item, dict):
+            continue
+        slot = _int(item.get("slot", 0))
         if 1 <= slot <= 3:
             slots.add(slot)
     return frozenset(slots)
 
 
+def _changed_health_slots(
+    previous_states: dict[int, str],
+    current_states: dict[int, str],
+) -> frozenset[int]:
+    slots = set(previous_states) | set(current_states)
+    return frozenset(
+        slot
+        for slot in slots
+        if previous_states.get(slot, "Healthy") != current_states.get(slot, "Healthy")
+    )
+
+
 def _health_item_for_slot(response: dict, slot: int) -> dict:
     health = response.get("proxyHealth") or {}
-    for item in health.get("degradedDevices", []) or []:
-        if not isinstance(item, dict):
-            continue
-        try:
-            item_slot = int(item.get("slot", 0))
-        except (TypeError, ValueError):
-            item_slot = 0
-        if item_slot == slot:
-            return item
-    return {"slot": slot}
+    for key in (
+        "deadDevices",
+        "degradedDevices",
+        "unhealthyDevices",
+        "excludedDevices",
+        "recoveringDevices",
+    ):
+        for item in health.get(key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            if _int(item.get("slot", 0)) == slot:
+                return item
+
+    props = response.get("properties") or {}
+    return {
+        "slot": slot,
+        "serialNumber": props.get(f"sn_{slot}") or response.get(f"sn_{slot}", ""),
+        "ipAddress": props.get(f"ipAddress_{slot}", "unknown"),
+    }
 
 
-def _degraded_transition_entity_ids(slots: frozenset[int]) -> set[str]:
+def _health_transition_entity_ids(slots: frozenset[int]) -> set[str]:
     entity_ids = {
         "sensor.proxy_zendure_pool_healthy",
         "sensor.vermogensopdracht",
