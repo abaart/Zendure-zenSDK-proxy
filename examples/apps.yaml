@@ -107,7 +107,9 @@ zendure_proxy:
   anti_pingpong_hold_seconds: 300
   anti_pingpong_min_power_watts: 100
   anti_pingpong_reserve_count: 1
-  anti_pingpong_reserve_power_watts: 30
+  # Commands below the hardware-dependent minimum are raised to 40 W for
+  # hardware up to 800 W and 80 W for hardware above 800 W.
+  anti_pingpong_reserve_power_watts: 40
   anti_pingpong_reserve_soc_margin_percent: 5
   anti_pingpong_mode_switch_delay_seconds: 30
   anti_pingpong_mode_switch_dominance_window_seconds: 120
@@ -134,7 +136,7 @@ zendure_proxy:
   # relay_saver_hold_seconds. Reserve mode payloads still have priority.
   relay_saver_enable: false
   relay_saver_min_drop_watts: 900
-  relay_saver_min_power_watts: 30
+  relay_saver_min_power_watts: 40
   relay_saver_hold_seconds: 30
 
   # Solar power fields.

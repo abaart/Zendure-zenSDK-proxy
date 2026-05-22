@@ -59,7 +59,7 @@ class Config:
     anti_pingpong_hold_seconds: int = 300
     anti_pingpong_min_power_watts: int = 100
     anti_pingpong_reserve_count: int = 1
-    anti_pingpong_reserve_power_watts: int = 30
+    anti_pingpong_reserve_power_watts: int = 40
     anti_pingpong_reserve_soc_margin_percent: int = 5
     anti_pingpong_mode_switch_delay_seconds: int = 30
     anti_pingpong_mode_switch_pause_seconds: int = 30
@@ -78,7 +78,7 @@ class Config:
     # Relay saver mode. Keeps devices briefly above zero after large drops.
     relay_saver_enable: bool = False
     relay_saver_min_drop_watts: int = 900
-    relay_saver_min_power_watts: int = 30
+    relay_saver_min_power_watts: int = 40
     relay_saver_hold_seconds: int = 30
 
     # Extras
@@ -185,7 +185,7 @@ def load_config(args: dict) -> Config:
         ),
         anti_pingpong_reserve_count=int(args.get("anti_pingpong_reserve_count", 1)),
         anti_pingpong_reserve_power_watts=int(
-            args.get("anti_pingpong_reserve_power_watts", 30)
+            args.get("anti_pingpong_reserve_power_watts", 40)
         ),
         anti_pingpong_reserve_soc_margin_percent=int(
             args.get("anti_pingpong_reserve_soc_margin_percent", 5)
@@ -227,7 +227,7 @@ def load_config(args: dict) -> Config:
         ),
         relay_saver_enable=_bool(args.get("relay_saver_enable", False)),
         relay_saver_min_drop_watts=int(args.get("relay_saver_min_drop_watts", 900)),
-        relay_saver_min_power_watts=int(args.get("relay_saver_min_power_watts", 30)),
+        relay_saver_min_power_watts=int(args.get("relay_saver_min_power_watts", 40)),
         relay_saver_hold_seconds=int(args.get("relay_saver_hold_seconds", 30)),
         solar_power_info=_bool(args.get("solar_power_info", False)),
         manual_mode_repeat=_bool(args.get("manual_mode_repeat", True)),

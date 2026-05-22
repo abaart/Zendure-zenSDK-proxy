@@ -15,6 +15,7 @@ from zendure_proxy_anti_pingpong import (
     apply_mode_switch_delay,
     clear_command_state,
     dominant_power_sign,
+    minimum_control_power_watts,
     record_power_direction,
     select_anti_pingpong_split,
     threshold_active,
@@ -560,12 +561,18 @@ def _dominant_mode_delay_payloads(
         return None
 
     delay_ac_mode = 1 if dominant_sign > 0 else 2
-    delay_power = max(0, int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)))
+    configured_delay_power = getattr(cfg, "anti_pingpong_reserve_power_watts", 40)
     payloads: dict[int, dict] = {}
     delayed_idx: list[int] = []
     for idx, power in enumerate(per_device):
         if power <= 0:
             continue
+        delay_power = minimum_control_power_watts(
+            state,
+            configured_delay_power,
+            delay_ac_mode,
+            idx,
+        )
         payloads[idx] = _delay_payload_for_device(
             delay_ac_mode,
             state.devices[idx].soc_limit,
@@ -637,7 +644,7 @@ def _relay_saver_payloads(
 
     anti_owned = set(anti_payloads or {})
     min_drop = max(0, int(getattr(cfg, "relay_saver_min_drop_watts", 900)))
-    min_power = max(0, int(getattr(cfg, "relay_saver_min_power_watts", 30)))
+    configured_min_power = getattr(cfg, "relay_saver_min_power_watts", 40)
     hold_seconds = max(0.0, float(getattr(cfg, "relay_saver_hold_seconds", 30)))
     payloads: dict[int, dict] = {}
     paused_idx: list[int] = []
@@ -659,6 +666,13 @@ def _relay_saver_payloads(
         expired_hold = False
 
         if until_ts > now_ts and hold_sign != 0:
+            hold_ac_mode = 1 if hold_sign > 0 else 2
+            min_power = minimum_control_power_watts(
+                state,
+                configured_min_power,
+                hold_ac_mode,
+                idx,
+            )
             if desired_sign == hold_sign and abs(desired) > min_power:
                 _clear_relay_saver_device(state, idx)
                 continue
@@ -686,6 +700,13 @@ def _relay_saver_payloads(
         if hold_seconds <= 0:
             continue
 
+        previous_ac_mode = 1 if previous_sign > 0 else 2
+        min_power = minimum_control_power_watts(
+            state,
+            configured_min_power,
+            previous_ac_mode,
+            idx,
+        )
         state.relay_saver_until_ts_by_idx[idx] = now_ts + hold_seconds
         state.relay_saver_sign_by_idx[idx] = previous_sign
         payloads[idx] = _relay_saver_payload_for_sign(

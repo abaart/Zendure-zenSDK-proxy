@@ -287,16 +287,16 @@ def test_anti_pingpong_charge_uses_reserve_discharge_power() -> None:
 
     assert clients[0].post_payloads[0]["properties"] == {
         "acMode": 1,
-        "inputLimit": 530,
+        "inputLimit": 540,
         "outputLimit": 0,
     }
     assert clients[1].post_payloads[0]["properties"] == {
         "acMode": 2,
         "inputLimit": 0,
-        "outputLimit": 30,
+        "outputLimit": 40,
     }
     assert state.latest_power_cmd == 500
-    assert [device.latest_power_cmd for device in state.devices] == [530, -30]
+    assert [device.latest_power_cmd for device in state.devices] == [540, -40]
 
 
 def test_anti_pingpong_discharge_uses_reserve_charge_power() -> None:
@@ -326,16 +326,94 @@ def test_anti_pingpong_discharge_uses_reserve_charge_power() -> None:
 
     assert clients[0].post_payloads[0]["properties"] == {
         "acMode": 1,
-        "inputLimit": 30,
+        "inputLimit": 40,
         "outputLimit": 0,
     }
     assert clients[1].post_payloads[0]["properties"] == {
         "acMode": 2,
         "inputLimit": 0,
-        "outputLimit": 530,
+        "outputLimit": 540,
     }
     assert state.latest_power_cmd == -500
-    assert [device.latest_power_cmd for device in state.devices] == [30, -530]
+    assert [device.latest_power_cmd for device in state.devices] == [40, -540]
+
+
+def test_anti_pingpong_uses_80_watt_reserve_for_high_power_devices() -> None:
+    state = _state(2)
+    state.max_power_in = 1200
+    state.max_power_out = 1200
+    state.anti_pingpong_active = True
+    state.devices[0].electric_level = 40
+    state.devices[1].electric_level = 80
+    state.devices[0].charge_max_limit = 1200
+    state.devices[0].inverse_max_power = 1200
+    state.devices[1].charge_max_limit = 1200
+    state.devices[1].inverse_max_power = 1200
+    state.devices[0].latest_ac_mode_cmd = 1
+    state.devices[1].latest_ac_mode_cmd = 2
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                anti_pingpong_enable=True,
+                anti_pingpong_activation_mode="smart",
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 580,
+        "outputLimit": 0,
+    }
+    assert clients[1].post_payloads[0]["properties"] == {
+        "acMode": 2,
+        "inputLimit": 0,
+        "outputLimit": 80,
+    }
+    assert [device.latest_power_cmd for device in state.devices] == [580, -80]
+
+
+def test_anti_pingpong_keeps_explicit_reserve_power_above_minimum() -> None:
+    state = _state(2)
+    state.anti_pingpong_active = True
+    state.devices[0].electric_level = 40
+    state.devices[1].electric_level = 80
+    state.devices[0].latest_ac_mode_cmd = 1
+    state.devices[1].latest_ac_mode_cmd = 2
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                anti_pingpong_enable=True,
+                anti_pingpong_activation_mode="smart",
+                anti_pingpong_reserve_power_watts=120,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 620,
+        "outputLimit": 0,
+    }
+    assert clients[1].post_payloads[0]["properties"] == {
+        "acMode": 2,
+        "inputLimit": 0,
+        "outputLimit": 120,
+    }
 
 
 def test_anti_pingpong_requires_reserve_soc_margin() -> None:
@@ -366,7 +444,7 @@ def test_anti_pingpong_requires_reserve_soc_margin() -> None:
     assert clients[1].post_payloads[0]["properties"] != {
         "acMode": 2,
         "inputLimit": 0,
-        "outputLimit": 30,
+        "outputLimit": 40,
     }
 
 
@@ -396,7 +474,7 @@ def test_anti_pingpong_capacity_fallback_uses_existing_distribution() -> None:
     assert clients[1].post_payloads[0]["properties"] != {
         "acMode": 2,
         "inputLimit": 0,
-        "outputLimit": 30,
+        "outputLimit": 40,
     }
 
 
@@ -427,7 +505,46 @@ def test_anti_pingpong_mode_switch_delay_keeps_current_mode_power() -> None:
 
     assert clients[1].post_payloads[0]["properties"] == {
         "acMode": 1,
-        "inputLimit": 30,
+        "inputLimit": 40,
+        "outputLimit": 0,
+    }
+    assert state.anti_pingpong_paused_idx == [1]
+
+
+def test_anti_pingpong_mode_switch_delay_uses_80_watts_for_high_power_devices() -> None:
+    state = _state(2)
+    state.max_power_in = 1200
+    state.max_power_out = 1200
+    state.anti_pingpong_active = True
+    state.devices[0].electric_level = 40
+    state.devices[1].electric_level = 80
+    state.devices[0].charge_max_limit = 1200
+    state.devices[0].inverse_max_power = 1200
+    state.devices[1].charge_max_limit = 1200
+    state.devices[1].inverse_max_power = 1200
+    state.devices[0].latest_ac_mode_cmd = 1
+    state.devices[1].latest_ac_mode_cmd = 1
+    state.devices[1].latest_ac_mode_change_ts = now()
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                anti_pingpong_enable=True,
+                anti_pingpong_activation_mode="smart",
+                anti_pingpong_mode_switch_delay_seconds=30,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[1].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 80,
         "outputLimit": 0,
     }
     assert state.anti_pingpong_paused_idx == [1]
@@ -491,11 +608,11 @@ def test_anti_pingpong_off_delay_keeps_weighted_charge_direction() -> None:
 
     assert clients[0].post_payloads[0]["properties"] == {
         "acMode": 1,
-        "inputLimit": 30,
+        "inputLimit": 40,
         "outputLimit": 0,
     }
     assert state.latest_power_cmd == -500
-    assert state.devices[0].latest_power_cmd == 30
+    assert state.devices[0].latest_power_cmd == 40
     assert state.anti_pingpong_last_reason == "dominant_charge_delay"
 
 
@@ -526,10 +643,10 @@ def test_anti_pingpong_off_delay_keeps_weighted_discharge_direction() -> None:
     assert clients[0].post_payloads[0]["properties"] == {
         "acMode": 2,
         "inputLimit": 0,
-        "outputLimit": 30,
+        "outputLimit": 40,
     }
     assert state.latest_power_cmd == 500
-    assert state.devices[0].latest_power_cmd == -30
+    assert state.devices[0].latest_power_cmd == -40
     assert state.anti_pingpong_last_reason == "dominant_discharge_delay"
 
 
@@ -574,12 +691,70 @@ def test_relay_saver_holds_previous_charge_before_zero_power() -> None:
 
     assert clients[0].post_payloads[0]["properties"] == {
         "acMode": 1,
-        "inputLimit": 30,
+        "inputLimit": 40,
         "outputLimit": 0,
     }
-    assert state.devices[0].latest_power_cmd == 30
+    assert state.devices[0].latest_power_cmd == 40
     assert state.relay_saver_paused_idx == [0]
     assert state.relay_saver_last_reason == "large_drop_to_zero"
+
+
+def test_relay_saver_uses_80_watts_for_high_power_devices() -> None:
+    state = _state(1)
+    state.max_power_in = 1200
+    state.max_power_out = 1200
+    state.ac_mode = 1
+    state.devices[0].charge_max_limit = 1200
+    state.devices[0].inverse_max_power = 1200
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            Config(device_ips=["ip1"], relay_saver_enable=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 80,
+        "outputLimit": 0,
+    }
+    assert state.devices[0].latest_power_cmd == 80
+    assert state.relay_saver_paused_idx == [0]
+
+
+def test_relay_saver_keeps_explicit_min_power_above_minimum() -> None:
+    state = _state(1)
+    state.ac_mode = 1
+    state.devices[0].latest_power_cmd = 1000
+    clients = [FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 0}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1"],
+                relay_saver_enable=True,
+                relay_saver_min_power_watts=120,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert clients[0].post_payloads[0]["properties"] == {
+        "acMode": 1,
+        "inputLimit": 120,
+        "outputLimit": 0,
+    }
+    assert state.devices[0].latest_power_cmd == 120
+    assert state.relay_saver_paused_idx == [0]
 
 
 def test_relay_saver_min_drop_threshold_skips_smaller_drop() -> None:
@@ -633,7 +808,7 @@ def test_relay_saver_repeated_zero_post_does_not_reset_hold() -> None:
     )
 
     assert state.relay_saver_until_ts_by_idx[0] == first_until
-    assert clients[0].post_payloads[-1]["properties"]["inputLimit"] == 30
+    assert clients[0].post_payloads[-1]["properties"]["inputLimit"] == 40
 
 
 def test_relay_saver_clears_hold_for_same_direction_power() -> None:
@@ -763,13 +938,13 @@ def test_relay_saver_does_not_replace_anti_pingpong_payload() -> None:
 
     assert clients[0].post_payloads[0]["properties"] == {
         "acMode": 1,
-        "inputLimit": 530,
+        "inputLimit": 540,
         "outputLimit": 0,
     }
     assert clients[1].post_payloads[0]["properties"] == {
         "acMode": 2,
         "inputLimit": 0,
-        "outputLimit": 30,
+        "outputLimit": 40,
     }
     assert state.relay_saver_paused_idx == []
 

@@ -251,7 +251,7 @@ zendure_proxy:
   anti_pingpong_hold_seconds: 300
   anti_pingpong_min_power_watts: 100
   anti_pingpong_reserve_count: 1
-  anti_pingpong_reserve_power_watts: 30
+  anti_pingpong_reserve_power_watts: 40
   anti_pingpong_reserve_soc_margin_percent: 5
   anti_pingpong_mode_switch_delay_seconds: 30
   anti_pingpong_mode_switch_dominance_window_seconds: 120
@@ -268,7 +268,7 @@ zendure_proxy:
 
   relay_saver_enable: false
   relay_saver_min_drop_watts: 900
-  relay_saver_min_power_watts: 30
+  relay_saver_min_power_watts: 40
   relay_saver_hold_seconds: 30
 
   solar_power_info: false
@@ -310,9 +310,9 @@ Reserve mode is bedoeld voor korte pieken in huisverbruik, bijvoorbeeld een Quoo
 
 `anti_pingpong_enable: false` is de standaardwaarde. Met deze standaardwaarde verandert de proxy geen bestaand laad- of ontlaadgedrag. Zet `anti_pingpong_enable: true` alleen aan wanneer korte nul-op-de-meter pieken vaak laad/ontlaad-wissels veroorzaken.
 
-Wanneer reserve mode actief is, houdt de proxy een Zendure als reserve wakker. De reserve-Zendure staat alvast in de andere richting. Voorbeeld: bij een laadopdracht van 500 W kan de proxy één Zendure 530 W laten laden en een andere Zendure 30 W laten ontladen. Het huis ziet dan ongeveer 500 W laden, maar de reserve-Zendure staat al klaar om snel een korte verbruikspiek op te vangen. De echte verdeling hangt af van het aantal Zendures, de SoC-limieten, en het maximale vermogen per Zendure.
+Wanneer reserve mode actief is, houdt de proxy een Zendure als reserve wakker. De reserve-Zendure staat alvast in de andere richting. Voorbeeld: bij een laadopdracht van 500 W kan de proxy één Zendure 540 W laten laden en een andere Zendure 40 W laten ontladen wanneer het maximale hardwarevermogen 800 W is. Het huis ziet dan ongeveer 500 W laden, maar de reserve-Zendure staat al klaar om snel een korte verbruikspiek op te vangen. De echte verdeling hangt af van het aantal Zendures, de SoC-limieten, en het maximale vermogen per Zendure.
 
-Reserve mode heeft ook nadelen. Meerdere Zendures blijven wakker. Een reserve-Zendure gebruikt standaard 30 W in de andere richting. Daardoor werken twee Zendures bewust tegen elkaar in. Dat kost extra stroom door standby-verbruik en omzettingsverlies. Zet reserve mode daarom alleen aan wanneer minder relay switches en sneller reageren belangrijker zijn dan het extra verlies.
+Reserve mode heeft ook nadelen. Meerdere Zendures blijven wakker. Een reserve-Zendure gebruikt standaard minimaal 40 W in de andere richting bij hardware tot en met 800 W. Een reserve-Zendure gebruikt standaard minimaal 80 W in de andere richting bij hardware boven 800 W. Daardoor werken twee Zendures bewust tegen elkaar in. Dat kost extra stroom door standby-verbruik en omzettingsverlies. Zet reserve mode daarom alleen aan wanneer minder relay switches en sneller reageren belangrijker zijn dan het extra verlies.
 
 De voordelen zijn minder relay switches en sneller reageren op korte importpieken. Dat kan vooral nuttig zijn wanneer salderen in Nederland is afgeschaft en korte netafname financieel zwaarder telt.
 
@@ -321,19 +321,19 @@ De proxy kent twee manieren om reserve mode aan te zetten:
 1. Vaste detectie met `anti_pingpong_activation_mode: "threshold"`.
 2. Slimme bespaarstand met `anti_pingpong_activation_mode: "smart"`.
 
-Vaste detectie kijkt alleen naar snelle wissels tussen laden en ontladen. Wanneer de proxy genoeg wissels ziet binnen een korte tijd, zet de proxy reserve mode tijdelijk aan. `anti_pingpong_window_seconds`, `anti_pingpong_min_flips`, en `anti_pingpong_hold_seconds` bepalen hoe snel de proxy reserve mode aanzet en hoe lang reserve mode minimaal actief blijft.
+Vaste detectie kijkt alleen naar snelle wissels tussen laden en ontladen. Wanneer de proxy genoeg wissels ziet binnen een korte tijd, zet de proxy reserve mode tijdelijk aan. `anti_pingpong_window_seconds`, `anti_pingpong_min_flips`, en `anti_pingpong_hold_seconds` bepalen hoe snel de proxy reserve mode aanzet en hoe lang reserve mode minimaal actief blijft. `anti_pingpong_min_power_watts` is alleen een detectiedrempel voor wissels en is geen minimum stuurvermogen.
 
 Slimme bespaarstand kijkt naar de P1/CT meter. De slimme bespaarstand rekent elke minuut terug over de laatste 5 minuten. De slimme bespaarstand stelt de vraag: had een reserve-Zendure geld kunnen besparen door korte importpieken direct op te vangen, of kostte de reserve-Zendure meer stroom dan de reserve-Zendure opleverde?
 
 De slimme bespaarstand telt winst wanneer de P1/CT meter kort netafname ziet. Een reserve-Zendure kan niet onbeperkt vermogen leveren. Voorbeeld: een reserve-Zendure met 800 W maximaal ontlaadvermogen kan van een piek van 2000 W maximaal 800 W direct opvangen. De overige 1200 W blijft dan netafname in de berekening.
 
-De slimme bespaarstand telt verlies voor het kleine reservevermogen. De standaard reserve is 30 W. De standaard lage-vermogens-efficiëntie is 40 procent met `anti_pingpong_low_power_roundtrip_efficiency: 0.40`. Dat betekent in gewone taal: van die kleine 30 W lus gaat veel energie verloren. De proxy rekent dit verlies mee voordat de proxy besluit om reserve mode aan te zetten.
+De slimme bespaarstand telt verlies voor het kleine reservevermogen. De standaard reserve is minimaal 40 W bij hardware tot en met 800 W en minimaal 80 W bij hardware boven 800 W. De standaard lage-vermogens-efficiëntie is 40 procent met `anti_pingpong_low_power_roundtrip_efficiency: 0.40`. Dat betekent in gewone taal: van die kleine 40 W of 80 W lus gaat veel energie verloren. De proxy rekent dit verlies mee voordat de proxy besluit om reserve mode aan te zetten.
 
 `anti_pingpong_energy_price_per_kwh` bepaalt met welke kWh-prijs de slimme bespaarstand rekent. Wanneer de berekende winst in euro hoger is dan het berekende verlies in euro, zet de slimme bespaarstand reserve mode aan. Wanneer de berekening twee minuten achter elkaar geen voordeel ziet, zet de slimme bespaarstand reserve mode weer uit. `anti_pingpong_smart_disable_bad_minutes` bepaalt dat aantal minuten.
 
-`anti_pingpong_smart_response_time_seconds: 3` is de opschaaltijd van een Zendure. De proxy rekent met deze waarde alsof een Zendure ongeveer 3 seconden nodig heeft om van het reservevermogen van 30 W naar het gevraagde hogere vermogen te gaan. Een reserve-Zendure kan tijdens die opschaaltijd al helpen, omdat de reserve-Zendure al wakker is en al in de juiste richting staat.
+`anti_pingpong_smart_response_time_seconds: 3` is de opschaaltijd van een Zendure. De proxy rekent met deze waarde alsof een Zendure ongeveer 3 seconden nodig heeft om van het reservevermogen van 40 W of 80 W naar het gevraagde hogere vermogen te gaan. Een reserve-Zendure kan tijdens die opschaaltijd al helpen, omdat de reserve-Zendure al wakker is en al in de juiste richting staat.
 
-Wanneer reserve mode uit staat, probeert de proxy ook onnodige laad/ontlaad-wissels te vermijden. `anti_pingpong_mode_switch_delay_seconds: 30` laat een Zendure standaard 30 seconden in de dominante richting staan. De oude naam `anti_pingpong_mode_switch_pause_seconds` blijft ook werken. De dominante richting is de tijdgewogen gemiddelde richting over de laatste 2 minuten. Wanneer de laatste 2 minuten vooral laden waren, blijft de Zendure laden met 30 W tijdens een kort ontlaadpiekje. Wanneer het huis echt langer blijft ontladen, schuift het gemiddelde naar ontladen en wisselt de Zendure alsnog naar ontladen. `anti_pingpong_mode_switch_dominance_window_seconds` bepaalt de lengte van dit kijkvenster.
+Wanneer reserve mode uit staat, probeert de proxy ook onnodige laad/ontlaad-wissels te vermijden. `anti_pingpong_mode_switch_delay_seconds: 30` laat een Zendure standaard 30 seconden in de dominante richting staan. De oude naam `anti_pingpong_mode_switch_pause_seconds` blijft ook werken. De dominante richting is de tijdgewogen gemiddelde richting over de laatste 2 minuten. Wanneer de laatste 2 minuten vooral laden waren, blijft de Zendure laden met 40 W bij 800 W hardware of 80 W bij hogere hardware tijdens een kort ontlaadpiekje. Wanneer het huis echt langer blijft ontladen, schuift het gemiddelde naar ontladen en wisselt de Zendure alsnog naar ontladen. `anti_pingpong_mode_switch_dominance_window_seconds` bepaalt de lengte van dit kijkvenster.
 
 De reserve-Zendure moet genoeg batterijruimte hebben. Voor ontladen moet de reserve-Zendure minimaal 5 procentpunt boven de minimum-SoC zitten. Voor laden moet de reserve-Zendure minimaal 5 procentpunt onder de ingestelde maximum-SoC zitten. `anti_pingpong_reserve_soc_margin_percent` bepaalt die marge.
 
@@ -360,17 +360,21 @@ De standaardwaarden zijn:
 ```yaml
 relay_saver_enable: false
 relay_saver_min_drop_watts: 900
-relay_saver_min_power_watts: 30
+relay_saver_min_power_watts: 40
 relay_saver_hold_seconds: 30
 ```
 
 Wanneer een device bijvoorbeeld van 1000 W laden naar 0 W zou gaan, stuurt
-`zendure_proxy_post_handler.execute_post(...)` eerst 30 seconden lang 30 W laden
+`zendure_proxy_post_handler.execute_post(...)` eerst 30 seconden lang 40 W laden
 naar dat device. Wanneer Home Assistant binnen die 30 seconden weer een duidelijke
 laadopdracht stuurt, stopt de proxy de relay saver hold en stuurt de proxy de
 nieuwe laadopdracht direct door. Wanneer de 30 seconden voorbij zijn en Home
 Assistant nog steeds 0 W of de andere richting vraagt, stuurt de proxy de 0 W of
 richtingwissel alsnog door.
+
+Voor reserve mode, mode-switch delay, dominant-direction delay, en relay saver mode gebruikt de proxy minimaal 40 W bij hardware tot en met 800 W. Bij hardware boven 800 W gebruikt de proxy minimaal 80 W. Een hogere configuratiewaarde, bijvoorbeeld `anti_pingpong_reserve_power_watts: 120` of `relay_saver_min_power_watts: 120`, blijft 120 W sturen.
+
+Referenties voor minimum stuurvermogen: [Tweakers post 85318386](https://gathering.tweakers.net/forum/list_message/85318386#85318386) en [Tweakers post 85317942](https://gathering.tweakers.net/forum/list_message/85317942#85317942).
 
 Relay saver mode heeft voordelen en nadelen. Het voordeel is dat korte pieken
 minder vaak een volledige aan/uit-wissel veroorzaken. Daardoor kan de Zendure

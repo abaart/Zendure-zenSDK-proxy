@@ -25,6 +25,32 @@ def activation_mode(cfg: Config) -> str:
     return mode if mode in {"threshold", "smart"} else "threshold"
 
 
+def minimum_control_power_watts(
+    state: ProxyState,
+    configured_power: int,
+    ac_mode: int,
+    device_idx: int | None = None,
+) -> int:
+    configured = max(0, _int(configured_power))
+    hardware_max = _control_hardware_max(state, ac_mode, device_idx)
+    hardware_floor = 80 if hardware_max > 800 else 40
+    return max(configured, hardware_floor)
+
+
+def maximum_control_power_watts(state: ProxyState, configured_power: int) -> int:
+    powers = [
+        minimum_control_power_watts(state, configured_power, ac_mode, idx)
+        for idx in range(len(getattr(state, "devices", [])))
+        for ac_mode in (1, 2)
+    ]
+    if not powers:
+        powers = [
+            minimum_control_power_watts(state, configured_power, 1),
+            minimum_control_power_watts(state, configured_power, 2),
+        ]
+    return max(powers)
+
+
 def record_power_direction(
     state: ProxyState,
     cfg: Config,
@@ -157,8 +183,18 @@ def select_anti_pingpong_split(
         service_idx = [service_candidates[0]]
 
     service_capacity = _service_capacity(state, ac_mode, service_idx, max_power)
-    reserve_power = max(0, int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)))
-    reserve_total = reserve_power * len(reserve_idx)
+    reserve_ac_mode = 2 if ac_mode == 1 else 1
+    configured_reserve_power = getattr(cfg, "anti_pingpong_reserve_power_watts", 40)
+    reserve_power_by_idx = {
+        idx: minimum_control_power_watts(
+            state,
+            configured_reserve_power,
+            reserve_ac_mode,
+            idx,
+        )
+        for idx in reserve_idx
+    }
+    reserve_total = sum(reserve_power_by_idx.values())
     needed_power = requested_power + reserve_total
 
     for idx in service_candidates:
@@ -176,7 +212,7 @@ def select_anti_pingpong_split(
         service_idx=service_idx,
         reserve_idx=reserve_idx,
         service_power=needed_power,
-        reserve_power_by_idx={idx: reserve_power for idx in reserve_idx},
+        reserve_power_by_idx=reserve_power_by_idx,
         reason="active",
     )
 
@@ -188,10 +224,7 @@ def apply_mode_switch_delay(
     now_ts: float,
 ) -> dict[int, dict]:
     delay_seconds = _mode_switch_delay_seconds(cfg)
-    delay_power = max(
-        0,
-        int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)),
-    )
+    configured_delay_power = getattr(cfg, "anti_pingpong_reserve_power_watts", 40)
     delayed: list[int] = []
     adjusted: dict[int, dict] = {}
 
@@ -207,6 +240,12 @@ def apply_mode_switch_delay(
         wants_switch = desired_ac_mode in (1, 2) and desired_ac_mode != current_ac_mode
         age = now_ts - dev.latest_ac_mode_change_ts
         if wants_switch and age < delay_seconds:
+            delay_power = minimum_control_power_watts(
+                state,
+                configured_delay_power,
+                current_ac_mode,
+                idx,
+            )
             delayed.append(idx)
             adjusted[idx] = _delay_payload(current_ac_mode, dev.soc_limit, delay_power)
             continue
@@ -247,7 +286,7 @@ def smart_evaluate_window(
     ]
     samples.sort()
     if len(samples) < 2 or reserve_capacity_watts <= 0:
-        _store_smart_result(state, 0.0, _smart_loss_kwh(cfg), cfg)
+        _store_smart_result(state, 0.0, _smart_loss_kwh(state, cfg), cfg)
         state.anti_pingpong_smart_bad_minutes += 1
         if state.anti_pingpong_smart_bad_minutes >= getattr(
             cfg, "anti_pingpong_smart_disable_bad_minutes", 2
@@ -275,7 +314,7 @@ def smart_evaluate_window(
             gain_kwh += min(power, reserve_capacity_watts) * dt / 3_600_000.0
         previous_ts, previous_power = sample_ts, power
 
-    loss_kwh = _smart_loss_kwh(cfg)
+    loss_kwh = _smart_loss_kwh(state, cfg)
     _store_smart_result(state, gain_kwh, loss_kwh, cfg)
     state.anti_pingpong_smart_last_eval_ts = now_ts
 
@@ -424,13 +463,35 @@ def _mark_ac_mode(dev, ac_mode: int, now_ts: float) -> None:
         dev.latest_ac_mode_cmd = ac_mode
 
 
-def _smart_loss_kwh(cfg: Config) -> float:
+def _control_hardware_max(
+    state: ProxyState,
+    ac_mode: int,
+    device_idx: int | None,
+) -> int:
+    if ac_mode == 1:
+        aggregate = getattr(state, "max_power_in", 0)
+        device_attr = "charge_max_limit"
+    elif ac_mode == 2:
+        aggregate = getattr(state, "max_power_out", 0)
+        device_attr = "inverse_max_power"
+    else:
+        return 800
+
+    device_limit = 0
+    if device_idx is not None and 0 <= device_idx < len(getattr(state, "devices", [])):
+        device_limit = getattr(state.devices[device_idx], device_attr, 0)
+
+    return max(0, _int(device_limit) or _int(aggregate) or 800)
+
+
+def _smart_loss_kwh(state: ProxyState, cfg: Config) -> float:
     window_seconds = max(
         1,
         int(getattr(cfg, "anti_pingpong_smart_window_seconds", 300)),
     )
     reserve_count = max(1, int(getattr(cfg, "anti_pingpong_reserve_count", 1)))
-    reserve_power = max(0, int(getattr(cfg, "anti_pingpong_reserve_power_watts", 30)))
+    configured_reserve_power = getattr(cfg, "anti_pingpong_reserve_power_watts", 40)
+    reserve_power = maximum_control_power_watts(state, configured_reserve_power)
     efficiency = float(getattr(cfg, "anti_pingpong_low_power_roundtrip_efficiency", 0.40))
     efficiency = min(max(efficiency, 0.0), 1.0)
     loss_watts = reserve_count * reserve_power * (1.0 - efficiency)

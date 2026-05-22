@@ -11,6 +11,7 @@ import asyncio
 import math
 from typing import Any, Callable, Optional
 
+from zendure_proxy_anti_pingpong import maximum_control_power_watts
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
 from zendure_proxy_health import (
@@ -502,7 +503,7 @@ def build_combined_response(
     props["relaySaverActive"] = 1 if relay_saver_remaining > 0 else 0
     props["relaySaverDelayedDevice"] = _idx_mask(state.relay_saver_paused_idx)
     props["relaySaverMinDropWatts"] = cfg.relay_saver_min_drop_watts
-    props["relaySaverMinPower"] = cfg.relay_saver_min_power_watts
+    props["relaySaverMinPower"] = _effective_relay_saver_min_power(state, cfg)
     props["relaySaverHoldSeconds"] = cfg.relay_saver_hold_seconds
     props["relaySaverRemainingSeconds"] = relay_saver_remaining
     props["relaySaverReason"] = state.relay_saver_last_reason
@@ -642,6 +643,11 @@ def _relay_saver_remaining_seconds(
         and until_ts > current_ts
     ]
     return math.ceil(max(remaining)) if remaining else 0
+
+
+def _effective_relay_saver_min_power(state: ProxyState, cfg: Config) -> int:
+    configured = getattr(cfg, "relay_saver_min_power_watts", 40)
+    return maximum_control_power_watts(state, configured)
 
 
 def _reported_power_cmd(props: dict) -> int:
