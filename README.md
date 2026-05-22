@@ -584,16 +584,28 @@ Wil je `Zendure Proxy` wel in de AppDaemon HADashboard lijst zien, kopieer dan [
 Het metrics dashboard toont:
 
 - uptime van de proxy;
+- laatste dashboard-update, auto-refresh interval, en het metricsvenster;
 - inkomende GET/POST totalen;
+- inkomende GET/POST timeouts;
+- inkomende GET/POST requests per seconde over de laatste 5 minuten;
+- inkomende GET/POST latency sample counts over de laatste 5 minuten;
 - inkomende GET/POST error rates over de laatste 5 minuten;
-- inkomende GET/POST gemiddelde latency, p95 latency en max latency;
+- inkomende GET/POST gemiddelde latency, p95 latency en max latency over de laatste 5 minuten;
+- aantal GET responses dat uit `state.last_get_response` kwam door `get_rate_limit_window`;
+- voor cache- en queue-counters de toename in de laatste 5 minuten en de laatste hit-tijd;
 - inkomende queue depths;
 - aantal GET requests dat door coalescing is bespaard;
-- aantal POST requests dat door deduplicatie is overgeslagen;
+- aantal oudere POST requests dat door deduplicatie is overgeslagen;
+- aantal POST property-key groepen waar deduplicatie is toegepast;
 - per Zendure device de uitgaande GET/POST totalen;
+- per Zendure device de uitgaande GET/POST timeouts;
+- per Zendure device hoe vaak een GET response de laatst bekende waarde voor dat device gebruikte;
 - per Zendure device het aantal gemeten relay wisselingen;
+- per Zendure device de laatste succesvolle request en laatste error;
+- per Zendure device de uitgaande GET/POST requests per seconde over de laatste 5 minuten;
+- per Zendure device de uitgaande GET/POST latency sample counts over de laatste 5 minuten;
 - per Zendure device de uitgaande GET/POST error rates over de laatste 5 minuten;
-- per Zendure device de uitgaande GET/POST gemiddelde latency, p95 latency en max latency;
+- per Zendure device de uitgaande GET/POST gemiddelde latency, p95 latency en max latency over de laatste 5 minuten;
 - per Zendure device de uitgaande queue depth.
 
 De proxy publiceert standaard ook Home Assistant metrics via AppDaemon `set_state()`. De metrics worden elke `metrics_ha_sensors_interval` seconden bijgewerkt.
@@ -610,6 +622,11 @@ Voorbeelden van sensors:
 sensor.zendure_proxy_uptime
 sensor.zendure_proxy_incoming_get_p95_ms
 sensor.zendure_proxy_incoming_post_p95_ms
+sensor.zendure_proxy_incoming_get_requests_per_second_5m
+sensor.zendure_proxy_incoming_post_requests_per_second_5m
+sensor.zendure_proxy_incoming_get_latency_samples_5m
+sensor.zendure_proxy_incoming_post_latency_samples_5m
+sensor.zendure_proxy_incoming_get_rate_limited_cache_total
 sensor.zendure_proxy_incoming_get_total
 sensor.zendure_proxy_incoming_post_total
 sensor.zendure_proxy_incoming_get_error_rate
@@ -622,7 +639,12 @@ sensor.zendure_proxy_queue_post_deduplicated_total
 sensor.zendure_proxy_device_1_queue_depth
 sensor.zendure_proxy_device_1_get_p95_ms
 sensor.zendure_proxy_device_1_post_p95_ms
+sensor.zendure_proxy_device_1_get_requests_per_second_5m
+sensor.zendure_proxy_device_1_post_requests_per_second_5m
+sensor.zendure_proxy_device_1_get_latency_samples_5m
+sensor.zendure_proxy_device_1_post_latency_samples_5m
 sensor.zendure_proxy_device_1_error_rate
+sensor.zendure_proxy_device_1_get_last_known_fallback_total
 sensor.zendure_proxy_device_1_relay_switches_total
 ```
 
@@ -709,12 +731,26 @@ over de gezonde Zendures. Bij P1-sturing bevat de P1-waarde al het echte laad-
 of ontlaadvermogen van de tijdelijk onbereikbare Zendure, dus de proxy gebruikt
 het laatst gemeten wattage alleen nog als diagnosewaarde in `lastKnownPower`.
 
-De logregels `Queue cleanup: coalesced ... queued GET requests into 1 upstream
-GET` en `Queue cleanup: deduplicated ... queued POST requests` betekenen dat de
-proxy een opstopping bewust heeft samengevoegd. De metrics sensors
-`sensor.zendure_proxy_queue_get_coalesced_total` en
-`sensor.zendure_proxy_queue_post_deduplicated_total` tellen hoe vaak dat is
-gebeurd.
+De logregel `Queue cleanup: coalesced ... queued GET requests into 1 upstream
+GET` betekent dat meerdere wachtende GET requests samen één upstream GET ronde
+gebruikten. De sensor `sensor.zendure_proxy_queue_get_coalesced_total` telt het
+aantal GET requests dat daardoor geen eigen upstream GET ronde startte.
+
+De logregel `Queue cleanup: deduplicated ... queued POST requests` betekent dat
+`RequestQueue.drain()` oudere POST requests met dezelfde property-key set heeft
+overgeslagen. De sensor `sensor.zendure_proxy_queue_post_deduplicated_total`
+telt het aantal oudere POST requests dat is overgeslagen. De sensor
+`sensor.zendure_proxy_queue_post_deduplicated_groups_total` telt het aantal
+property-key groepen waar meer dan één queued POST request in zat. Voorbeeld:
+drie queued POST requests met alleen `inputLimit` leveren twee overgeslagen
+oudere POST requests en één gededupliceerde property-key groep op.
+
+De sensor `sensor.zendure_proxy_incoming_get_rate_limited_cache_total` telt GET
+responses die direct uit `state.last_get_response` kwamen omdat
+`request_ts - state.last_upstream_get_ts <= get_rate_limit_window`. De sensor
+`sensor.zendure_proxy_device_1_get_last_known_fallback_total` telt hoe vaak
+Zendure 1 geen verse GET response gaf en `build_combined_response(...)` daarom
+`state.devices[0].last_response` voor dat device gebruikte.
 
 ### Testen vanuit HA Terminal
 

@@ -673,3 +673,6 @@ class _FakeMetrics:
         _timeout: bool,
     ) -> None:
         return None
+
+    def record_incoming_get_rate_limited_cache(self) -> None:
+        return None

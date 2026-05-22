@@ -51,6 +51,7 @@ async def execute_get(
             "One or more devices did not respond; using per-device cache where possible",
             level="WARNING",
         )
+        _record_last_known_fallbacks(results, state, metrics)
     if not any(result is not None for result in results):
         if state.last_get_response:
             return response_with_proxy_health(
@@ -110,6 +111,19 @@ def _record_relay_measurements(results: list[Optional[dict]], metrics) -> None:
             or _int(props.get("packInputPower", 0)) > 0
         )
         recorder(idx, active)
+
+
+def _record_last_known_fallbacks(
+    results: list[Optional[dict]], state: ProxyState, metrics
+) -> None:
+    recorder = getattr(metrics, "record_device_get_last_known_fallback", None)
+    if recorder is None:
+        return
+    for idx, data in enumerate(results):
+        if data is not None:
+            continue
+        if idx < len(state.devices) and state.devices[idx].last_response:
+            recorder(idx)
 
 
 def _recalculate_aggregate_device_limits(

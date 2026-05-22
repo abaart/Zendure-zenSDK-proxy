@@ -91,7 +91,7 @@ from zendure_proxy_health import (  # noqa: E402
     record_get_results,
     response_with_proxy_health,
 )
-from zendure_proxy_metrics import MetricsRegistry  # noqa: E402
+from zendure_proxy_metrics import MetricsRegistry, render_metrics_dashboard  # noqa: E402
 from zendure_proxy_mqtt_discovery import mqtt_sensor_config  # noqa: E402
 from zendure_proxy_post_handler import execute_post  # noqa: E402
 from zendure_proxy_power import now  # noqa: E402
@@ -1013,17 +1013,36 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         restored = metrics.restore_counters_from_sensors(
             {
                 "sensor.zendure_proxy_incoming_get_total": "5",
+                "sensor.zendure_proxy_incoming_get_rate_limited_cache_total": "6",
                 "sensor.zendure_proxy_queue_get_coalesced_total": "7",
                 "sensor.zendure_proxy_device_1_get_total": "11",
+                "sensor.zendure_proxy_device_1_get_last_known_fallback_total": "12",
                 "sensor.zendure_proxy_device_1_relay_switches_total": "13",
             }
         )
 
-        self.assertEqual(restored, 4)
+        self.assertEqual(restored, 6)
         self.assertEqual(metrics.incoming["GET"].total, 5)
+        self.assertEqual(metrics.incoming_get_rate_limited_cache_total, 6)
         self.assertEqual(metrics.queue_get_coalesced_requests_total, 7)
         self.assertEqual(metrics.devices[0].get.total, 11)
+        self.assertEqual(metrics.devices[0].get_last_known_fallback_total, 12)
         self.assertEqual(metrics.devices[0].relay_switches_total, 13)
+
+    def test_metrics_restore_preserves_large_integer_counters(self) -> None:
+        metrics = MetricsRegistry(1)
+        huge_counter = 1234567890123456789012345678901234567890
+
+        restored = metrics.restore_counters_from_sensors(
+            {
+                "sensor.zendure_proxy_incoming_get_total": str(huge_counter),
+                "sensor.zendure_proxy_queue_get_coalesced_total": f"{huge_counter}.0",
+            }
+        )
+
+        self.assertEqual(restored, 2)
+        self.assertEqual(metrics.incoming["GET"].total, huge_counter)
+        self.assertEqual(metrics.queue_get_coalesced_requests_total, huge_counter)
 
     def test_metrics_relay_switch_counter_uses_measured_edges(self) -> None:
         metrics = MetricsRegistry(1)
@@ -1036,6 +1055,130 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         metrics.record_device_relay_measurement(0, False)
 
         self.assertEqual(metrics.devices[0].relay_switches_total, 2)
+
+    def test_metrics_exposes_cache_and_fallback_counters(self) -> None:
+        metrics = MetricsRegistry(2)
+
+        metrics.record_incoming_get_rate_limited_cache()
+        metrics.record_device_get_last_known_fallback(1)
+        metrics.record_queue_batch(
+            get_count=3,
+            post_group_count=2,
+            coalesced_gets=2,
+            deduplicated_posts=1,
+            deduplicated_groups=1,
+        )
+
+        snap = metrics.snapshot()
+
+        self.assertEqual(
+            snap["queue"]["incoming_get_rate_limited_cache_total"],
+            1,
+        )
+        self.assertEqual(
+            snap["devices"][1]["get_last_known_fallback_total"],
+            1,
+        )
+        self.assertEqual(
+            snap["queue"]["incoming_get_rate_limited_cache_activity"]["delta"],
+            1,
+        )
+        self.assertGreater(
+            snap["queue"]["incoming_get_rate_limited_cache_activity"]["last_hit_ts"],
+            0,
+        )
+        self.assertEqual(snap["queue"]["get_coalesced_requests_activity"]["delta"], 2)
+        self.assertEqual(
+            snap["queue"]["post_deduplicated_requests_activity"]["delta"],
+            1,
+        )
+        self.assertEqual(
+            snap["devices"][1]["get_last_known_fallback_activity"]["delta"],
+            1,
+        )
+        self.assertGreater(
+            snap["devices"][1]["get_last_known_fallback_activity"]["last_hit_ts"],
+            0,
+        )
+
+        sensors = metrics.flat_ha_sensors()
+        self.assertEqual(
+            sensors["sensor.zendure_proxy_incoming_get_rate_limited_cache_total"][0],
+            1,
+        )
+        self.assertEqual(
+            sensors["sensor.zendure_proxy_device_2_get_last_known_fallback_total"][0],
+            1,
+        )
+
+        prometheus = "\n".join(metrics.prometheus_lines())
+        self.assertIn("zendure_proxy_incoming_get_rate_limited_cache_total 1", prometheus)
+        self.assertIn(
+            'zendure_proxy_device_get_last_known_fallback_total{device="2"} 1',
+            prometheus,
+        )
+
+    def test_metrics_snapshot_exposes_five_minute_rates_and_samples(self) -> None:
+        metrics = MetricsRegistry(1)
+
+        for _ in range(2500):
+            metrics.start_incoming("GET")
+            metrics.finish_incoming("GET", 25.0, 200)
+
+        snap = metrics.snapshot()
+
+        self.assertEqual(snap["window_s"], 300)
+        self.assertEqual(snap["incoming"]["GET"]["latency"]["count"], 2500)
+        self.assertAlmostEqual(
+            snap["incoming"]["GET"]["window"]["rate_per_s"],
+            2500 / 300,
+        )
+
+        sensors = metrics.flat_ha_sensors()
+        self.assertIn(
+            "sensor.zendure_proxy_incoming_get_requests_per_second_5m",
+            sensors,
+        )
+        self.assertIn(
+            "sensor.zendure_proxy_incoming_get_latency_samples_5m",
+            sensors,
+        )
+
+    def test_metrics_dashboard_labels_five_minute_values(self) -> None:
+        metrics = MetricsRegistry(1)
+        metrics.start_incoming("GET")
+        metrics.finish_incoming("GET", 25.0, 504, timeout=True)
+        metrics.start_outgoing(0, "GET")
+        metrics.finish_outgoing(0, "GET", 40.0, True)
+
+        html = render_metrics_dashboard(
+            "Zendure proxy metrics",
+            metrics.snapshot(),
+            10,
+        )
+
+        self.assertIn("Window metrics: last 5 min", html)
+        self.assertIn("Req/s 5m", html)
+        self.assertIn("Samples 5m", html)
+        self.assertIn("Avg 5m ms", html)
+        self.assertIn("P95 5m ms", html)
+        self.assertIn("Timeouts", html)
+        self.assertIn("Last success", html)
+        self.assertIn("Last error", html)
+        self.assertIn('class="help"', html)
+        self.assertIn("POST older requests skipped", html)
+        self.assertIn("two skipped old requests and one sent newest request", html)
+        self.assertIn("POST key groups deduplicated", html)
+        self.assertIn("count as one deduplicated key group", html)
+        self.assertIn("GET responses served from rate-limit cache", html)
+        self.assertIn("Zendure 1 GET last-known fallbacks", html)
+        self.assertIn("+5m", html)
+        self.assertIn("Last hit", html)
+        self.assertIn("Queue-depth rows are gauges", html)
+        self.assertNotIn('http-equiv="refresh"', html)
+        self.assertIn('help.addEventListener("mouseenter", pauseRefresh)', html)
+        self.assertIn('help.addEventListener("mouseleave", scheduleRefresh)', html)
+        self.assertIn("Auto-refresh paused while this help is open.", html)
 
     def test_execute_get_records_relay_switches_from_fresh_measurements(self) -> None:
         cfg = Config(device_ips=["ip1", "ip2"])
@@ -1076,6 +1219,32 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(metrics.devices[0].relay_switches_total, 2)
         self.assertEqual(metrics.devices[1].relay_switches_total, 0)
+
+    def test_execute_get_records_last_known_fallback_per_device(self) -> None:
+        cfg = Config(device_ips=["ip1", "ip2"])
+        state = ProxyState(
+            device_count=2,
+            devices=[
+                DeviceState(
+                    ip="ip1",
+                    sn="SN1",
+                    last_response=_device(1, "SN1", output_pack_power=0),
+                ),
+                DeviceState(ip="ip2", sn="SN2"),
+            ],
+            startup_ts=100.0,
+            last_get_response={"proxyVersion": "test", "packData": []},
+        )
+        metrics = MetricsRegistry(2)
+        clients = [_MutableGetClient(None), _MutableGetClient(_device(2, "SN2"))]
+
+        response = asyncio.run(
+            execute_get(clients, state, cfg, lambda *args, **kwargs: None, metrics)
+        )
+
+        self.assertEqual(response["proxyHealth"]["reason"], "upstream_partial")
+        self.assertEqual(metrics.devices[0].get_last_known_fallback_total, 1)
+        self.assertEqual(metrics.devices[1].get_last_known_fallback_total, 0)
 
     def test_diagnostics_reset_clears_node_red_counters(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
@@ -1548,6 +1717,9 @@ class _FakeMetrics:
         return None
 
     def record_queue_batch(self, **_kwargs) -> None:
+        return None
+
+    def record_incoming_get_rate_limited_cache(self) -> None:
         return None
 
     def set_incoming_queue_depth(self, _get_depth: int, _post_depth: int) -> None:
