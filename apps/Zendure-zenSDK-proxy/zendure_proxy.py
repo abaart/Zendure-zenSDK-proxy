@@ -960,6 +960,7 @@ class ZendureProxy(hass.Hass):
                 <= self._cfg.get_rate_limit_window
                 and cache_is_usable(self._state, self._cfg, current_ts=request_ts)
             ):
+                self._metrics.record_incoming_get_rate_limited_cache()
                 status = 200
                 data = response_with_proxy_health(
                     self._state.last_get_response or {},
