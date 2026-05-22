@@ -21,7 +21,7 @@ Deze repo is op dit moment experimenteel. Bijdrages (ook door middel van testen)
   - [Testen vanuit HA Terminal](#testen-vanuit-ha-terminal)
   - [Overstappen van Node-RED naar AppDaemon](#overstappen-van-node-red-naar-appdaemon)
   - [Release naar HACS](#release-naar-hacs)
-- [Bewust verschil met Node-RED bij drie Zendures](#bewust-verschil-met-node-red-bij-drie-zendures)
+- [Bewust verschil met Node-RED bij drie of meer Zendures](#bewust-verschil-met-node-red-bij-drie-of-meer-zendures)
 
 ## Credits, upstream en wijzigingen
 
@@ -42,7 +42,7 @@ Dank aan `gast777` voor het uitzoeken van de Zendure-interfacing, de
 proxy-aanpak, de vermogensverdeling, de monitoring-attributen, de Home Assistant
 voorbeelden, en de vele praktijktests waarop deze AppDaemon versie voortbouwt.
 
-Deze AppDaemon/Python implementatie van de proxy heeft vijf concrete doelen, bovenop die van de upstream repo:
+Deze AppDaemon/Python implementatie van de proxy heeft zes concrete doelen, bovenop die van de upstream repo:
 
 1. Backwards compatible blijven met de proxy van `gast777`. Bestaande Gielz
    dashboards, Home Assistant sensors, en REST aanroepen moeten dezelfde
@@ -60,6 +60,11 @@ Deze AppDaemon/Python implementatie van de proxy heeft vijf concrete doelen, bov
 5. Problemen per Zendure zichtbaar maken. De metrics laten zien hoe vaak en
    wanneer een specifieke Zendure traag reageert, timeouts heeft, of fouten
    geeft. Zie [Metrics](#metrics).
+6. Meer fysieke Zendures rechtstreeks aansturen. `devices:` en
+   `ip_zendure_1` tot en met `ip_zendure_10` kunnen maximaal 10 Zendures
+   configureren. `charge_max_watts` en `discharge_max_watts` kunnen per
+   Zendure een lagere laad- of ontlaadgrens zetten dan de hardwarewaarden
+   `chargeMaxLimit` en `inverseMaxPower`.
 
 De Node-RED bestanden, de documentatie over de originele proxy-aanpak, en de
 Home Assistant voorbeelden blijven afkomstig van de upstream repository van
@@ -108,8 +113,8 @@ In gewone taal:
 - `sensor.proxy_zendure_pool_healthy` is `Healthy` wanneer alle geconfigureerde
   Zendures normaal antwoorden. De sensor is `Degraded` wanneer één of meer
   Zendures niet goed antwoorden.
-- `sensor.zendure_1_health`, `sensor.zendure_2_health`, en
-  `sensor.zendure_3_health` tonen per Zendure `Healthy`, `Degraded`, of `Dead`.
+- `sensor.zendure_1_health` tot en met `sensor.zendure_10_health` tonen per
+  Zendure `Healthy`, `Degraded`, of `Dead` wanneer het slot geconfigureerd is.
 - Een Zendure wordt `Degraded` wanneer een outgoing GET naar die Zendure geen
   bruikbare response oplevert. Voorbeelden zijn: geen antwoord binnen
   `zendure_request_timeout`, standaard 60 seconden, een verbroken verbinding,
@@ -178,7 +183,7 @@ HACS installeert de AppDaemon code uit `apps/Zendure-zenSDK-proxy/`. HACS maakt 
 9. Zet `production_mode: true` onder de bestaande globale `appdaemon:` sectie.
 10. Open je AppDaemon `apps.yaml`.
 11. Kopieer de `zendure_proxy` configuratie uit [`examples/apps.yaml`](examples/apps.yaml) naar je AppDaemon `apps.yaml`.
-12. Vul `ip_zendure_1`, `ip_zendure_2`, en optioneel `ip_zendure_3` in.
+12. Vul `devices:` in met de IP-adressen van je Zendure devices. Je kunt ook de oude keys `ip_zendure_1` tot en met `ip_zendure_10` gebruiken.
 13. Herstart AppDaemon.
 14. Vul in Gielz bij `Zendure 2400 AC IP-adres` het interne AppDaemon add-on adres in: `a0d7b954-appdaemon:8120/endpoint`.
 
@@ -212,9 +217,13 @@ zendure_proxy:
   module: zendure_proxy
   class: ZendureProxy
 
-  ip_zendure_1: "192.168.1.101"
-  ip_zendure_2: "192.168.1.102"
-  ip_zendure_3: ""
+  devices:
+    - ip: "192.168.1.101"
+      charge_max_watts:
+      discharge_max_watts:
+    - ip: "192.168.1.102"
+      charge_max_watts:
+      discharge_max_watts:
 
   server_host: "0.0.0.0"
   server_port: 8120
@@ -318,7 +327,32 @@ zendure_proxy:
   proxy_ha_sensors_mqtt_retain: true
 ```
 
-Voor een eerste test hoef je meestal alleen `ip_zendure_1`, `ip_zendure_2`, `ip_zendure_3`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
+Voor een eerste test hoef je meestal alleen `devices:`, `server_host`, en `server_port` aan te passen. De overige waarden hierboven zijn de standaardwaarden uit [`examples/apps.yaml`](examples/apps.yaml).
+
+De proxy ondersteunt maximaal 10 Zendure devices. Gebruik bij voorkeur de `devices:` lijst:
+
+```yaml
+devices:
+  - ip: "192.168.1.101"
+    charge_max_watts: 600
+    discharge_max_watts: 700
+  - ip: "192.168.1.102"
+    charge_max_watts:
+    discharge_max_watts: 500
+```
+
+`charge_max_watts` en `discharge_max_watts` zijn optioneel. De proxy gebruikt per richting de laagste waarde van de hardwarewaarde uit `chargeMaxLimit` of `inverseMaxPower` en de YAML override. Daardoor kan een device met een lagere veilige grens minder vermogen krijgen dan een sterker device. De vermogensverdeling gebruikt de effectieve grens per device en de SoC-headroom per device.
+
+De oude genummerde vorm blijft werken tot en met slot 10:
+
+```yaml
+ip_zendure_1: "192.168.1.101"
+zendure_1_charge_max_watts: 600
+zendure_1_discharge_max_watts: 700
+ip_zendure_2: "192.168.1.102"
+```
+
+Gebruik niet beide vormen voor hetzelfde slot, tenzij je wilt dat `devices[N-1]` de genummerde keys voor slot `N` overschrijft.
 
 ### Reserve mode (experimenteel)
 
@@ -326,7 +360,7 @@ Reserve mode is de power anti-pingpong mode. De instellingnamen beginnen nog met
 
 Reserve mode is experimenteel. Controleer na het inschakelen de eerste dagen regelmatig of de Zendures doen wat je verwacht, of de SoC-limieten goed worden gerespecteerd, en of het extra stroomverbruik acceptabel blijft.
 
-Reserve mode is bedoeld voor korte pieken in huisverbruik, bijvoorbeeld een Quooker, oven, wasmachine, of ander verwarmingselement dat om de paar minuten kort aan en uit gaat. Zonder reserve mode kan de proxy steeds wisselen tussen laden en ontladen. Elke wissel kan een relay switch in een Zendure veroorzaken.
+Reserve mode is bedoeld voor korte pieken in huisverbruik, bijvoorbeeld een Quooker, oven, wasmachine, of ander verwarmingselement dat om de paar minuten kort aan en uit gaat. Zonder reserve mode kan de proxy steeds wisselen tussen laden en ontladen. Elke wissel kan een relay switch in een Zendure veroorzaken. Bij meer dan twee Zendure devices kan `anti_pingpong_reserve_count` meerdere reserve-devices kiezen. `select_anti_pingpong_split(...)` gebruikt de effectieve laad- en ontlaadgrens per device, zodat een reserve-device met een lagere YAML override minder reservevermogen krijgt.
 
 `anti_pingpong_enable: false` is de standaardwaarde. Met deze standaardwaarde verandert de proxy geen bestaand laad- of ontlaadgedrag. Zet `anti_pingpong_enable: true` alleen aan wanneer korte nul-op-de-meter pieken vaak laad/ontlaad-wissels veroorzaken.
 
@@ -505,8 +539,7 @@ action:
       title: "Zendure proxy degraded"
       message: >
         Een of meer Zendures reageren niet goed. Controleer
-        sensor.zendure_1_health, sensor.zendure_2_health, en
-        sensor.zendure_3_health in Home Assistant.
+        sensor.zendure_1_health tot en met sensor.zendure_10_health in Home Assistant.
 ```
 
 ### Logging
@@ -672,7 +705,7 @@ sensor.zendure_proxy_device_1_get_last_known_fallback_total
 sensor.zendure_proxy_device_1_relay_switches_total
 ```
 
-Voor een 2- of 3-device setup worden ook `device_2` en `device_3` sensors aangemaakt.
+Voor een setup met meer devices worden ook `device_2` tot en met `device_10` sensors aangemaakt.
 
 De proxy kan de gewone proxy sensors automatisch in Home Assistant aanmaken. Dat zijn dezelfde soort sensors als de oude REST sensors uit `HA_REST_proxy_sensors_NL` en `HA_REST_proxy_sensors_EN`, maar dan zonder dat je dat sensorblok handmatig hoeft te plakken.
 
@@ -691,6 +724,7 @@ Voorbeelden van proxy response sensors:
 ```text
 sensor.zendure_2_soc_limiet_status
 sensor.zendure_2_serienummer
+sensor.zendure_10_health
 sensor.dual_mode_demper_status
 sensor.vermogensopdracht_zendure_2
 sensor.zendure_actief_device
@@ -835,10 +869,12 @@ Deze stappen zijn bedoeld voor gebruikers die de Node-RED proxy al hebben draaie
 5. Vul in `apps.yaml` dezelfde Zendure IP-adressen in die nu in Node-RED staan:
 
 ```yaml
-ip_zendure_1: "192.168.x.x"
-ip_zendure_2: "192.168.x.y"
-ip_zendure_3: ""
+devices:
+  - ip: "192.168.x.x"
+  - ip: "192.168.x.y"
 ```
+
+De oude keys `ip_zendure_1`, `ip_zendure_2`, en `ip_zendure_3` blijven werken. Nieuwe installaties kunnen `devices:` gebruiken, omdat `devices:` ook per-device overrides zoals `charge_max_watts` en `discharge_max_watts` ondersteunt.
 
 6. Laat `proxy_ha_sensors_skip_existing: true` staan wanneer je de oude REST sensors al hebt. De AppDaemon proxy laat bestaande REST sensors dan met rust.
 
@@ -875,7 +911,7 @@ GET /endpoint/properties/report HTTP/1.1" 200
 POST /endpoint/properties/write HTTP/1.1" 200
 ```
 
-12. Test daarna een veilige stand in Gielz, bijvoorbeeld een lage laad- of ontlaadopdracht. Controleer of `sensor.vermogensopdracht_zendure_1`, `sensor.vermogensopdracht_zendure_2`, en eventueel `sensor.vermogensopdracht_zendure_3` blijven updaten.
+12. Test daarna een veilige stand in Gielz, bijvoorbeeld een lage laad- of ontlaadopdracht. Controleer of `sensor.vermogensopdracht_zendure_1`, `sensor.vermogensopdracht_zendure_2`, en de andere geconfigureerde `sensor.vermogensopdracht_zendure_N` entities blijven updaten.
 
 13. Laat Node-RED nog even geïnstalleerd staan, maar zorg dat Gielz niet meer naar Node-RED wijst. Als de AppDaemon proxy stabiel werkt, kun je de Node-RED flow uitschakelen of verwijderen.
 
@@ -893,13 +929,13 @@ Controleer vóór een release dat de GitHub Action `Validate HACS` groen is.
 
 
 
-## Bewust verschil met Node-RED bij drie Zendures
+## Bewust verschil met Node-RED bij drie of meer Zendures
 
-De AppDaemon/Python implementatie probeert backwards compatible te zijn met de
-Node-RED implementatie. Er is één bewust verschil bij drie Zendures in Single
-Mode.
+De AppDaemon/Python implementatie behoudt dezelfde REST velden en dezelfde
+vermogensopdrachten als de Node-RED implementatie. Er is één bewust verschil bij
+drie of meer Zendures in Single Mode.
 
-Wanneer drie Zendures actief zijn in de proxy en de actieve Zendure door
+Wanneer drie of meer Zendures actief zijn in de proxy en de actieve Zendure door
 SoC-balancering wisselt, stuurt de Node-RED 3-Zendure code het vermogen direct
 naar de nieuw gekozen Zendure. Voorbeeld: de proxy krijgt een opdracht voor
 `500 W` laden, Zendure 1 was actief, en de SoC waarden zijn `80%`, `70%`, en
@@ -918,5 +954,5 @@ Deze afwijking is bewust. Een Zendure die in slaapstand of lage activiteit
 stond, kan tijd nodig hebben om relais, modus, en vermogensregeling stabiel te
 krijgen. Direct van `0 W` naar de volledige opdracht springen kan onrustiger
 gedrag geven dan een korte overgang. De AppDaemon/Python implementatie gebruikt
-daarom bij drie Zendures dezelfde zachte overgang als bij twee Zendures, ook al
-slaat de Node-RED 3-Zendure code die overgang over.
+daarom bij drie of meer Zendures dezelfde zachte overgang als bij twee Zendures,
+ook al slaat de Node-RED 3-Zendure code die overgang over.

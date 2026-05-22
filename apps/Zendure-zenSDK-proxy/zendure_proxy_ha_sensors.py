@@ -6,6 +6,7 @@ from typing import Any
 
 
 SensorMap = dict[str, tuple[Any, dict[str, Any]]]
+MAX_SENSOR_DEVICES = 10
 
 
 def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> SensorMap:
@@ -18,13 +19,14 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
     recovering_slots = _health_slots(health, "recoveringDevices")
     degraded_slots = _health_slots(health, "degradedDevices")
     dead_slots = _health_slots(health, "deadDevices")
-    unavailable_slots = excluded_slots | recovering_slots
+    unavailable_slots = excluded_slots | recovering_slots | dead_slots
     sensors: SensorMap = {}
 
     def add(entity_id: str, state: Any, friendly_name: str, **attrs: Any) -> None:
         sensors[entity_id] = (state, {"friendly_name": friendly_name, **attrs})
 
-    for idx in range(1, 4):
+    sensor_device_count = min(MAX_SENSOR_DEVICES, max(3, configured_count))
+    for idx in range(1, sensor_device_count + 1):
         health_item = _health_item(health, idx)
         health_state = (
             "unavailable"
@@ -50,6 +52,12 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             excluded_from_power=idx in unavailable_slots,
             recovery_seconds_remaining=health_item.get(
                 "recoverySecondsRemaining", 0.0
+            ),
+            charge_max_watts=props.get(f"effectiveChargeMax_{idx}", 0),
+            discharge_max_watts=props.get(f"effectiveInverseMaxPower_{idx}", 0),
+            configured_charge_max_watts=props.get(f"configuredChargeMax_{idx}"),
+            configured_discharge_max_watts=props.get(
+                f"configuredInverseMaxPower_{idx}"
             ),
         )
         slot_unavailable = idx in unavailable_slots
@@ -221,7 +229,7 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
     )
     add(
         "sensor.zendure_actief_device",
-        _active_device(props.get("activeDevice")),
+        _active_device(props.get("activeDevice"), configured_count),
         "Zendure Actief Device",
         icon="mdi:battery",
     )
@@ -251,7 +259,7 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
     )
     add(
         "sensor.anti_pingpong_reserve_device",
-        _active_device(props.get("antiPingpongReserveDevice", 0)),
+        _active_device(props.get("antiPingpongReserveDevice", 0), configured_count),
         "Reserve Mode Reserve Device",
         icon="mdi:battery-clock",
     )
@@ -261,7 +269,8 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             props.get(
                 "antiPingpongDelayedDevice",
                 props.get("antiPingpongPausedDevice", 0),
-            )
+            ),
+            configured_count,
         ),
         "Reserve Mode Vertraagd Device",
         icon="mdi:timer-pause",
@@ -314,7 +323,7 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
     )
     add(
         "sensor.relay_saver_vertraagd_device",
-        _active_device(props.get("relaySaverDelayedDevice", 0)),
+        _active_device(props.get("relaySaverDelayedDevice", 0), configured_count),
         "Relay Saver Vertraagd Device",
         icon="mdi:timer-pause",
     )
@@ -448,17 +457,31 @@ def _on_off(value: Any) -> str:
     return _map_int(value, {0: "Uit", 1: "Aan"})
 
 
-def _active_device(value: Any) -> str:
-    return {
-        0: "Geen",
-        1: "Zendure 1",
-        2: "Zendure 2",
-        3: "Zendure 1 en 2",
-        4: "Zendure 3",
-        5: "Zendure 1 en 3",
-        6: "Zendure 2 en 3",
-        7: "Alle",
-    }.get(_int(value, -99), "Onbekend")
+def _active_device(value: Any, configured_count: int = 3) -> str:
+    mask = _int(value, -99)
+    if mask == 0:
+        return "Geen"
+    if mask < 0:
+        return "Onbekend"
+    slot_count = min(
+        MAX_SENSOR_DEVICES,
+        max(1, configured_count, mask.bit_length()),
+    )
+    all_mask = (1 << min(MAX_SENSOR_DEVICES, max(1, configured_count))) - 1
+    if mask == all_mask:
+        return "Alle"
+    names = [
+        f"Zendure {idx + 1}"
+        for idx in range(slot_count)
+        if mask & (1 << idx)
+    ]
+    if not names:
+        return "Onbekend"
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} en {names[1]}"
+    return f"{', '.join(names[:-1])} en {names[-1]}"
 
 
 def _health_slots(health: dict, key: str) -> set[int]:
@@ -470,7 +493,13 @@ def _health_slots(health: dict, key: str) -> set[int]:
 
 
 def _health_item(health: dict, slot: int) -> dict:
-    for key in ("unhealthyDevices", "excludedDevices", "recoveringDevices"):
+    for key in (
+        "unhealthyDevices",
+        "excludedDevices",
+        "recoveringDevices",
+        "degradedDevices",
+        "deadDevices",
+    ):
         for item in health.get(key, []):
             if isinstance(item, dict) and _int(item.get("slot"), -1) == slot:
                 return item

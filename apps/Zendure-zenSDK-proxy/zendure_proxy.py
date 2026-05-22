@@ -85,7 +85,22 @@ class ZendureProxy(hass.Hass):
         ]
         self._state = ProxyState(
             device_count=len(self._cfg.device_ips),
-            devices=[DeviceState(ip=ip) for ip in self._cfg.device_ips],
+            devices=[
+                DeviceState(
+                    ip=ip,
+                    configured_charge_max_watts=(
+                        self._cfg.device_power_limits[idx].charge_max_watts
+                        if idx < len(self._cfg.device_power_limits)
+                        else None
+                    ),
+                    configured_discharge_max_watts=(
+                        self._cfg.device_power_limits[idx].discharge_max_watts
+                        if idx < len(self._cfg.device_power_limits)
+                        else None
+                    ),
+                )
+                for idx, ip in enumerate(self._cfg.device_ips)
+            ],
             equal_mode=self._cfg.equal_mode,
             always_dual_mode=self._cfg.always_dual_mode,
             dualmode_damper_enabled=self._cfg.damper_enable,
@@ -156,6 +171,8 @@ class ZendureProxy(hass.Hass):
                 level="WARNING",
             )
         else:
+            for warning in self._cfg.config_warnings:
+                self._proxy_log(f"Configuration warning: {warning}", level="WARNING")
             self._proxy_log(
                 f"Zendure proxy v{PROXY_VERSION} started | "
                 f"port={self._cfg.server_port} | "
@@ -411,6 +428,10 @@ class ZendureProxy(hass.Hass):
             f"<td>{device['electric_level']}</td>"
             f"<td>{device['soc_limit']}</td>"
             f"<td>{device['latest_power_cmd']}</td>"
+            f"<td>{device['charge_max_limit']}</td>"
+            f"<td>{device['inverse_max_power']}</td>"
+            f"<td>{device['effective_charge_max_watts']}</td>"
+            f"<td>{device['effective_discharge_max_watts']}</td>"
             f"<td>{device['missing_replies']}</td>"
             "</tr>"
             for device in snapshot["devices"]
@@ -462,7 +483,7 @@ class ZendureProxy(hass.Hass):
     <section>
       <h2>Devices</h2>
       <table>
-        <tr><th>Device</th><th>SN</th><th>IP</th><th>SoC</th><th>socLimit</th><th>latestPowerCmd</th><th>Missing GET</th></tr>
+        <tr><th>Device</th><th>SN</th><th>IP</th><th>SoC</th><th>socLimit</th><th>latestPowerCmd</th><th>chargeMaxLimit</th><th>inverseMaxPower</th><th>effectiveChargeMax</th><th>effectiveInverseMaxPower</th><th>Missing GET</th></tr>
         {device_rows}
       </table>
     </section>
@@ -495,6 +516,18 @@ class ZendureProxy(hass.Hass):
                     "electric_level": device.electric_level,
                     "soc_limit": device.soc_limit,
                     "latest_power_cmd": device.latest_power_cmd,
+                    "charge_max_limit": device.charge_max_limit,
+                    "inverse_max_power": device.inverse_max_power,
+                    "effective_charge_max_watts": device.effective_charge_max_watts,
+                    "effective_discharge_max_watts": (
+                        device.effective_discharge_max_watts
+                    ),
+                    "configured_charge_max_watts": (
+                        device.configured_charge_max_watts
+                    ),
+                    "configured_discharge_max_watts": (
+                        device.configured_discharge_max_watts
+                    ),
                     "missing_replies": (
                         state.counter_missing[idx]
                         if idx < len(state.counter_missing)
@@ -552,7 +585,7 @@ class ZendureProxy(hass.Hass):
         self._state.counter_serial_missing_drop = 0
         self._state.counter_post_received = 0
         self._state.counter_post_replies = 0
-        self._state.counter_missing = [0, 0, 0]
+        self._state.counter_missing = [0] * self._state.device_count
 
     async def _publish_metrics_sensors(self, _kwargs=None) -> None:
         if not self._cfg.metrics_enabled or not self._cfg.metrics_ha_sensors_enabled:
@@ -1267,7 +1300,7 @@ def _health_slots(response: dict, key: str) -> frozenset[int]:
         if not isinstance(item, dict):
             continue
         slot = _int(item.get("slot", 0))
-        if 1 <= slot <= 3:
+        if 1 <= slot <= 10:
             slots.add(slot)
     return frozenset(slots)
 

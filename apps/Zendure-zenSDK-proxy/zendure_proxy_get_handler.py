@@ -146,12 +146,16 @@ def _recalculate_aggregate_device_limits(
         state.min_soc = max(mins)
     if sets:
         state.soc_set = min(sets)
-    chg = [dev.charge_max_limit for dev in devs if dev.charge_max_limit > 0]
+    chg = [dev.effective_charge_max_watts for dev in devs if dev.effective_charge_max_watts > 0]
     if chg:
-        state.max_power_in = min(chg)
-    inv = [dev.inverse_max_power for dev in devs if dev.inverse_max_power > 0]
+        state.max_power_in = max(chg)
+    inv = [
+        dev.effective_discharge_max_watts
+        for dev in devs
+        if dev.effective_discharge_max_watts > 0
+    ]
     if inv:
-        state.max_power_out = min(inv)
+        state.max_power_out = max(inv)
 
 
 # ── Response builder ───────────────────────────────────────────────────────────
@@ -241,7 +245,7 @@ def build_combined_response(
             props["inputLimit"] = 0
             props["outputLimit"] = state.output_limit
 
-    inv_raw = sum(devs[i].inverse_max_power for i in included)
+    inv_raw = sum(devs[i].effective_discharge_max_watts for i in included)
     props["inverseMaxPower"] = (
         state.inverse_max_power_cmd
         if state.inverse_max_power_cmd != state.inverse_max_power_effective
@@ -249,7 +253,7 @@ def build_combined_response(
         else inv_raw
     )
 
-    chg_raw = sum(devs[i].charge_max_limit for i in included)
+    chg_raw = sum(devs[i].effective_charge_max_watts for i in included)
     props["chargeMaxLimit"] = (
         state.charge_max_limit_cmd
         if state.charge_max_limit_cmd != state.charge_max_limit_effective
@@ -356,11 +360,11 @@ def build_combined_response(
         bat_cal_times = [_prop(i, "batCalTime", 0) for i in included]
         props["batCalTime"] = bat_cal_times[0] if len(set(bat_cal_times)) == 1 else -1
         by_slot = {idx: _prop(idx, "batCalTime", 0) for idx in included}
-        for i in range(3):
+        for i in range(max(slot_count, 3)):
             props[f"batCalTime_{i+1}"] = by_slot.get(i, 0)
     else:
         props["batCalTime"] = 0
-        for i in range(3):
+        for i in range(max(slot_count, 3)):
             props[f"batCalTime_{i+1}"] = 0
 
     # ── gridOffMode: majority / priority rule ──────────────────────────────────
@@ -380,7 +384,7 @@ def build_combined_response(
 
     # ── Optional solar fields ──────────────────────────────────────────────────
     if cfg.solar_power_info:
-        for idx in range(3):
+        for idx in range(slot_count):
             source = sources[idx].get("properties", {}) if idx in included else {}
             target_base = idx * 6
             for source_idx in range(1, 5):
@@ -416,6 +420,12 @@ def build_combined_response(
         props[f"sn{s}"] = devs[i].sn
         props[f"ipAddress{s}"] = devs[i].ip
         props[f"gridOffMode{s}"] = dp.get("gridOffMode", 2)
+        props[f"chargeMaxLimit{s}"] = devs[i].charge_max_limit
+        props[f"inverseMaxPower{s}"] = devs[i].inverse_max_power
+        props[f"effectiveChargeMax{s}"] = devs[i].effective_charge_max_watts
+        props[f"effectiveInverseMaxPower{s}"] = devs[i].effective_discharge_max_watts
+        props[f"configuredChargeMax{s}"] = devs[i].configured_charge_max_watts
+        props[f"configuredInverseMaxPower{s}"] = devs[i].configured_discharge_max_watts
 
     # Pad absent slots so HA always sees _1/_2/_3
     for i in range(slot_count, 3):
@@ -426,6 +436,9 @@ def build_combined_response(
             "electricLevel", "latestPowerCmd", "outputPackPower",
             "packInputPower", "outputHomePower", "gridInputPower",
             "inputLimit", "outputLimit", "socStatus",
+            "chargeMaxLimit", "inverseMaxPower", "effectiveChargeMax",
+            "effectiveInverseMaxPower", "configuredChargeMax",
+            "configuredInverseMaxPower",
         ):
             props[f"{key}{s}"] = 0
         props[f"acMode{s}"] = None
@@ -579,7 +592,7 @@ def _active_device_mask(
     ):
         return 3
 
-    active_idx = [idx for idx, cmd in enumerate(device_power_cmds[:3]) if cmd != 0]
+    active_idx = [idx for idx, cmd in enumerate(device_power_cmds[:10]) if cmd != 0]
     if not active_idx:
         active_idx = [
             idx for idx in state.devices_active_idx
@@ -590,7 +603,7 @@ def _active_device_mask(
         active_idx = [state.single_mode_active_device]
     mask = 0
     for idx in active_idx:
-        if 0 <= idx < 3:
+        if 0 <= idx < 10:
             mask |= 1 << idx
     return mask
 
@@ -598,7 +611,7 @@ def _active_device_mask(
 def _idx_mask(indices: list[int]) -> int:
     mask = 0
     for idx in indices:
-        if 0 <= idx < 3:
+        if 0 <= idx < 10:
             mask |= 1 << idx
     return mask
 

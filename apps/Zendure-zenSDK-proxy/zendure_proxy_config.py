@@ -6,13 +6,26 @@ All consumer code accesses settings via attribute access (cfg.server_port, etc.)
 instead of dict look-ups.
 """
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+MAX_DEVICE_COUNT = 10
+
+
+@dataclass
+class DevicePowerLimit:
+    charge_max_watts: int | None = None
+    discharge_max_watts: int | None = None
 
 
 @dataclass
 class Config:
     # Required
     device_ips: list
+    device_power_limits: list[DevicePowerLimit] = field(default_factory=list)
+    config_warnings: list[str] = field(default_factory=list)
 
     # Server
     server_port: int = 8120
@@ -131,11 +144,7 @@ def is_placeholder_device_ip(value: str) -> bool:
 
 
 def load_config(args: dict) -> Config:
-    raw = [
-        str(args.get("ip_zendure_1", "")).strip(),
-        str(args.get("ip_zendure_2", "")).strip(),
-        str(args.get("ip_zendure_3", "")).strip(),
-    ]
+    device_ips, device_power_limits, config_warnings = _load_device_slots(args)
     mode_switch_delay_seconds = int(
         args.get(
             "anti_pingpong_mode_switch_delay_seconds",
@@ -143,7 +152,9 @@ def load_config(args: dict) -> Config:
         )
     )
     return Config(
-        device_ips=[ip for ip in raw if ip and not is_placeholder_device_ip(ip)],
+        device_ips=device_ips,
+        device_power_limits=device_power_limits,
+        config_warnings=config_warnings,
         server_port=int(args.get("server_port", 8120)),
         server_host=str(args.get("server_host", "0.0.0.0")),
         zendure_request_timeout=float(args.get("zendure_request_timeout", 60.0)),
@@ -278,3 +289,104 @@ def load_config(args: dict) -> Config:
             args.get("diagnostics_dashboard_route", "zendure_proxy_diagnostics")
         ).strip(),
     )
+
+
+def _load_device_slots(args: dict) -> tuple[list[str], list[DevicePowerLimit], list[str]]:
+    slots = [
+        {"ip": "", "limits": DevicePowerLimit()}
+        for _idx in range(MAX_DEVICE_COUNT)
+    ]
+    warnings: list[str] = []
+
+    for idx in range(1, MAX_DEVICE_COUNT + 1):
+        raw_ip = str(args.get(f"ip_zendure_{idx}", "")).strip()
+        if raw_ip and not is_placeholder_device_ip(raw_ip):
+            slots[idx - 1]["ip"] = raw_ip
+        slots[idx - 1]["limits"] = DevicePowerLimit(
+            charge_max_watts=_cap_from_args(
+                args,
+                f"zendure_{idx}_charge_max_watts",
+                warnings,
+            ),
+            discharge_max_watts=_cap_from_args(
+                args,
+                f"zendure_{idx}_discharge_max_watts",
+                warnings,
+            ),
+        )
+
+    raw_devices = args.get("devices")
+    if raw_devices not in (None, ""):
+        if not isinstance(raw_devices, list):
+            warnings.append("devices must be a YAML list; devices value ignored")
+        else:
+            for idx, item in enumerate(raw_devices):
+                slot = idx + 1
+                if slot > MAX_DEVICE_COUNT:
+                    warnings.append(
+                        f"devices[{idx}] ignored because max device count is {MAX_DEVICE_COUNT}"
+                    )
+                    continue
+                if not isinstance(item, dict):
+                    warnings.append(f"devices[{idx}] must be a mapping; entry ignored")
+                    continue
+                raw_ip = str(item.get("ip", "")).strip()
+                if not raw_ip or is_placeholder_device_ip(raw_ip):
+                    continue
+                slots[idx]["ip"] = raw_ip
+                slots[idx]["limits"] = DevicePowerLimit(
+                    charge_max_watts=_cap_from_mapping(
+                        item,
+                        "charge_max_watts",
+                        f"devices[{idx}].charge_max_watts",
+                        warnings,
+                    ),
+                    discharge_max_watts=_cap_from_mapping(
+                        item,
+                        "discharge_max_watts",
+                        f"devices[{idx}].discharge_max_watts",
+                        warnings,
+                    ),
+                )
+
+    device_ips: list[str] = []
+    device_power_limits: list[DevicePowerLimit] = []
+    for slot in slots:
+        ip = str(slot["ip"]).strip()
+        if not ip:
+            continue
+        device_ips.append(ip)
+        device_power_limits.append(slot["limits"])
+
+    return device_ips, device_power_limits, warnings
+
+
+def _cap_from_args(args: dict, key: str, warnings: list[str]) -> int | None:
+    if key not in args:
+        return None
+    return _parse_positive_int(args.get(key), key, warnings)
+
+
+def _cap_from_mapping(
+    item: dict,
+    key: str,
+    label: str,
+    warnings: list[str],
+) -> int | None:
+    if key not in item:
+        return None
+    return _parse_positive_int(item.get(key), label, warnings)
+
+
+def _parse_positive_int(value, label: str, warnings: list[str]) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        cap = int(float(value))
+    except (TypeError, ValueError):
+        warnings.append(f"{label} must be a positive watt value; value ignored")
+        return None
+    if cap <= 0:
+        warnings.append(f"{label} must be greater than 0 watts; value ignored")
+        return None
+    return cap
