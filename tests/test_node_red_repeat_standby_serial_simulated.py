@@ -488,6 +488,19 @@ def test_zendure_request_timeout_is_user_configurable() -> None:
     asyncio.run(run_client())
 
 
+def test_soc_boundary_power_settings_are_user_configurable() -> None:
+    cfg = load_config(
+        {
+            "ip_zendure_1": "192.168.1.101",
+            "soc_boundary_min_device_power_watts": "125",
+            "soc_boundary_low_power_change_diff": "2",
+        }
+    )
+
+    assert cfg.soc_boundary_min_device_power_watts == 125
+    assert cfg.soc_boundary_low_power_change_diff == 2
+
+
 def test_connection_options_are_user_configurable() -> None:
     cfg = load_config(
         {

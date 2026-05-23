@@ -84,6 +84,18 @@ zendure_proxy:
   # SoC balancing.
   # Exponent for nonlinear weighting: higher means more aggressive balancing.
   balancing_factor: 5
+  # When one healthy Zendure is below minSoc or above 90% SoC, each active
+  # Zendure gets at least soc_boundary_min_device_power_watts.
+  # When the command is too low for that, execute_post(...) uses fewer Zendures.
+  # During charging, the highest-SoC Zendure can get 0 W until lower-SoC
+  # Zendures catch up. During discharging, the lowest-SoC Zendure can get 0 W.
+  # Extra power goes to Zendures that need to catch up in SoC.
+  # When a fresh GET shows that an active Zendure delivers less packInputPower or
+  # outputPackPower than the last command, execute_post(...) compensates on the
+  # next command with the other Zendures.
+  # In the low-power range, execute_post(...) switches at 1% SoC difference.
+  soc_boundary_min_device_power_watts: 100
+  soc_boundary_low_power_change_diff: 1
 
   # Dual-mode damper prevents switching around the single-mode threshold.
   dualmode_damper_enable: false

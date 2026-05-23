@@ -817,6 +817,8 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
         self.assertEqual(default_cfg.get_rate_limit_window, 1.0)
         self.assertEqual(default_cfg.get_recovery_window, 30.0)
         self.assertEqual(default_cfg.degraded_power_hold_seconds, 1800.0)
+        self.assertEqual(default_cfg.soc_boundary_min_device_power_watts, 100)
+        self.assertEqual(default_cfg.soc_boundary_low_power_change_diff, 1)
         self.assertEqual(default_cfg.anti_pingpong_reserve_power_watts, 40)
         self.assertEqual(default_cfg.relay_saver_min_power_watts, 40)
 

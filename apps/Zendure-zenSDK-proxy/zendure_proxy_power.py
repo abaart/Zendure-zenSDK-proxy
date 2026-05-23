@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zendure_proxy_state import ProxyState
 
-PROXY_VERSION = "v0.1.21"
+PROXY_VERSION = "v0.1.22"
+SOC_LOCKSTEP_HIGH_THRESHOLD = 90.0
 
 
 def now() -> float:
@@ -93,6 +94,26 @@ def distribute_power(
 
 # ── Active-device count ────────────────────────────────────────────────────────
 
+def soc_boundary_lockstep_active(
+    state: ProxyState,
+    eligible_indices: list[int] | None = None,
+) -> bool:
+    """Return True when SoC boundary protection should change distribution."""
+    indices = (
+        eligible_indices
+        if eligible_indices is not None
+        else list(range(state.device_count))
+    )
+    min_soc_pct = state.min_soc / 10.0
+    for idx in indices:
+        if idx < 0 or idx >= len(state.devices):
+            continue
+        level = state.devices[idx].electric_level
+        if level < min_soc_pct or level > SOC_LOCKSTEP_HIGH_THRESHOLD:
+            return True
+    return False
+
+
 def calc_active_count(
     state: ProxyState,
     ac_mode: int,
@@ -102,6 +123,9 @@ def calc_active_count(
     force_all: bool,
     device_change_diff: int = 5,
     eligible_indices: list[int] | None = None,
+    soc_boundary_min_device_power_watts: int = 100,
+    soc_boundary_active: bool = False,
+    soc_boundary_measured_capacities: list[int] | None = None,
 ) -> int:
     """
     Decide how many devices should be active based on power level and SoC state.
@@ -117,7 +141,34 @@ def calc_active_count(
     if n <= 0:
         return 0
 
-    if force_all or n == 1:
+    if n == 1:
+        return n
+
+    if soc_boundary_active or soc_boundary_lockstep_active(state, indices):
+        min_power = max(0, int(soc_boundary_min_device_power_watts))
+        if total_power <= 0 or min_power <= 0:
+            return n
+        if soc_boundary_measured_capacities:
+            ranked_positions = sorted(
+                range(n),
+                key=lambda pos: state.devices[indices[pos]].electric_level,
+                reverse=(ac_mode == 2),
+            )
+            ranked_capacities = [
+                soc_boundary_measured_capacities[pos]
+                for pos in ranked_positions
+            ]
+            target = max(1, total_power // min_power)
+            active_count = min(n, target)
+            while (
+                active_count < n
+                and sum(ranked_capacities[:active_count]) < total_power
+            ):
+                active_count += 1
+            return max(1, active_count)
+        return max(1, min(n, total_power // min_power))
+
+    if force_all:
         return n
 
     if n == 2:

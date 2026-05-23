@@ -1177,7 +1177,7 @@ def test_passive_zero_power_timestamp_is_not_refreshed_by_repeated_post() -> Non
     assert state.devices[1].latest_power_cmd_zero_ts == 123.0
 
 
-def test_charging_one_device_below_min_soc_uses_low_device_only() -> None:
+def test_charging_one_device_below_min_soc_charges_low_device_most() -> None:
     state = _state(2)
     state.min_soc = 100
     state.devices[0].electric_level = 8
@@ -1194,11 +1194,36 @@ def test_charging_one_device_below_min_soc_uses_low_device_only() -> None:
         )
     )
 
-    assert state.device_active_count == 1
-    assert state.devices_active_idx == [0]
+    assert state.device_active_count == 2
+    assert state.devices_active_idx == [0, 1]
     assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
         800,
-        0,
+        200,
+    ]
+
+
+def test_discharging_one_device_below_min_soc_holds_low_device_back() -> None:
+    state = _state(2)
+    state.min_soc = 100
+    state.devices[0].electric_level = 8
+    state.devices[1].electric_level = 50
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 1000}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 2
+    assert state.devices_active_idx == [1, 0]
+    assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
+        200,
+        800,
     ]
 
 
@@ -1236,15 +1261,39 @@ def test_soc_limit_selects_device_without_limit() -> None:
     assert state.devices_active_idx == [0]
 
 
-def test_high_soc_charging_uses_both_devices() -> None:
+def test_high_soc_charging_holds_high_device_back_until_capacity_requires_it() -> None:
     state = _state(2)
-    state.devices[0].electric_level = 98
-    state.devices[1].electric_level = 94
+    state.devices[0].electric_level = 91
+    state.devices[1].electric_level = 80
     clients = [FakeDeviceClient(), FakeDeviceClient()]
 
     asyncio.run(
         execute_post(
-            {"properties": {"acMode": 1, "inputLimit": 100}},
+            {"properties": {"acMode": 1, "inputLimit": 1000}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 2
+    assert state.devices_active_idx == [1, 0]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        200,
+        800,
+    ]
+
+
+def test_high_soc_discharging_discharges_high_device_most() -> None:
+    state = _state(2)
+    state.devices[0].electric_level = 91
+    state.devices[1].electric_level = 80
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 1000}},
             clients,
             state,
             Config(device_ips=["ip1", "ip2"], device_change_diff=5),
@@ -1254,6 +1303,141 @@ def test_high_soc_charging_uses_both_devices() -> None:
 
     assert state.device_active_count == 2
     assert state.devices_active_idx == [0, 1]
+    assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
+        800,
+        200,
+    ]
+
+
+def test_low_power_high_soc_charge_switches_device_at_one_percent() -> None:
+    state = _state(2)
+    state.devices[0].electric_level = 90
+    state.devices[1].electric_level = 91
+    state.single_mode_active_device = 1
+    state.devices_active_idx = [1]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 150}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [0]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        150,
+        0,
+    ]
+
+
+def test_high_soc_charge_below_two_hundred_watts_uses_one_device() -> None:
+    state = _state(2)
+    state.devices[0].electric_level = 91
+    state.devices[1].electric_level = 80
+    state.single_mode_active_device = 1
+    state.devices_active_idx = [1]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 151}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [1]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        151,
+    ]
+
+
+def test_high_soc_charge_two_hundred_watts_uses_one_device() -> None:
+    state = _state(2)
+    state.devices[0].electric_level = 91
+    state.devices[1].electric_level = 80
+    state.single_mode_active_device = 1
+    state.devices_active_idx = [1]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 200}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [1]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        200,
+    ]
+
+
+def test_low_power_high_soc_discharge_uses_high_device_only() -> None:
+    state = _state(2)
+    state.devices[0].electric_level = 91
+    state.devices[1].electric_level = 90
+    state.single_mode_active_device = 1
+    state.devices_active_idx = [1]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 2, "outputLimit": 150}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [0]
+    assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
+        150,
+        0,
+    ]
+
+
+def test_low_power_below_min_soc_charge_uses_low_device_only() -> None:
+    state = _state(2)
+    state.min_soc = 100
+    state.devices[0].electric_level = 9
+    state.devices[1].electric_level = 10
+    state.single_mode_active_device = 1
+    state.devices_active_idx = [1]
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 150}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [0]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        150,
+        0,
+    ]
 
 
 def test_standby_devices_do_not_receive_zero_or_standalone_wake_posts() -> None:

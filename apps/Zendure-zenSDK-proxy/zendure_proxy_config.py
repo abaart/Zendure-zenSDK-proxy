@@ -41,6 +41,8 @@ class Config:
 
     # SoC balancing
     balancing_factor: int = 5
+    soc_boundary_min_device_power_watts: int = 100
+    soc_boundary_low_power_change_diff: int = 1
 
     # Dual-mode damper
     damper_enable: bool = False
@@ -166,6 +168,12 @@ def load_config(args: dict) -> Config:
         standby_discharging=_bool(args.get("single_mode_standby_discharging_enable", True)),
         transition_timer=int(args.get("singlemode_transition_timer", 40)),
         balancing_factor=int(args.get("balancing_factor", 5)),
+        soc_boundary_min_device_power_watts=int(
+            args.get("soc_boundary_min_device_power_watts", 100)
+        ),
+        soc_boundary_low_power_change_diff=int(
+            args.get("soc_boundary_low_power_change_diff", 1)
+        ),
         damper_enable=_bool(args.get("dualmode_damper_enable", False)),
         damper_timer=int(args.get("dualmode_damper_timer", 120)),
         damper_amount=int(args.get("dualmode_damper_amount", 200)),

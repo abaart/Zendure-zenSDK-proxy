@@ -23,7 +23,14 @@ from zendure_proxy_anti_pingpong import (
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
 from zendure_proxy_health import eligible_device_indices
-from zendure_proxy_power import apply_transition, calc_active_count, distribute_power, now
+from zendure_proxy_power import (
+    SOC_LOCKSTEP_HIGH_THRESHOLD,
+    apply_transition,
+    calc_active_count,
+    distribute_power,
+    now,
+    soc_boundary_lockstep_active,
+)
 from zendure_proxy_standby import manage_standby
 from zendure_proxy_state import ProxyState
 
@@ -111,6 +118,10 @@ async def execute_post(
         return responses if responses else {"ack": "pong"}
 
     # ── Power command ─────────────────────────────────────────────────────────
+    previous_power_cmd_ts = max(
+        state.latest_power_message_ts,
+        state.latest_power_repeat_ts,
+    )
     now_ts = now()
     if is_repeat:
         state.latest_power_repeat_ts = now_ts
@@ -148,9 +159,32 @@ async def execute_post(
     anti_activation_active = _anti_pingpong_activation_active(
         state, cfg, latest_power_cmd, invalid_direction, force_all, now_ts
     )
+    soc_boundary_active = (
+        not invalid_direction
+        and soc_boundary_lockstep_active(state, eligible)
+    )
+    soc_boundary_min_power = _soc_boundary_min_device_power(cfg)
+    selection_eligible = (
+        _soc_boundary_command_indices(
+            state, ac_mode, eligible, distribution_power, max_power,
+            previous_power_cmd_ts,
+        )
+        if soc_boundary_active
+        else eligible
+    )
+    soc_boundary_reduced_active_count = (
+        soc_boundary_active
+        and distribution_power > 0
+        and soc_boundary_min_power > 0
+        and (
+            len(selection_eligible) < len(eligible)
+            or distribution_power < len(selection_eligible) * soc_boundary_min_power
+        )
+    )
 
     if (
         not invalid_direction
+        and not soc_boundary_active
         and not anti_activation_active
         and (cfg.damper_enable or state.dualmode_damper_enabled)
         and ac_mode == 2
@@ -167,7 +201,19 @@ async def execute_post(
         state.device_active_count = calc_active_count(
             state, ac_mode, distribution_power, upper, lower, force_all,
             cfg.device_change_diff,
-            eligible_indices=eligible,
+            eligible_indices=selection_eligible,
+            soc_boundary_min_device_power_watts=(
+                soc_boundary_min_power
+            ),
+            soc_boundary_active=soc_boundary_active,
+            soc_boundary_measured_capacities=(
+                _measured_power_capacities(
+                    state, ac_mode, selection_eligible, max_power,
+                    previous_power_cmd_ts,
+                )
+                if soc_boundary_active
+                else None
+            ),
         )
 
     # ── Which specific devices are active? ────────────────────────────────────
@@ -177,7 +223,12 @@ async def execute_post(
         _select_active_devices(
             state, ac_mode, cfg,
             previous_active_count=previous_active_count,
-            eligible_indices=eligible,
+            eligible_indices=selection_eligible,
+            soc_diff_threshold=(
+                cfg.soc_boundary_low_power_change_diff
+                if soc_boundary_reduced_active_count
+                else None
+            ),
         )
 
     if (
@@ -194,6 +245,7 @@ async def execute_post(
     if (
         state.device_active_count == 1
         and state.single_mode_active_device != prev_active_device
+        and not soc_boundary_reduced_active_count
         and prev_active_device in eligible_set
         and previous_active_count == 1
         and not (
@@ -214,10 +266,19 @@ async def execute_post(
     if invalid_direction:
         per_device = [0] * n
     else:
+        if soc_boundary_active:
+            state.transition_start_ts = 0.0
+            state.single_to_dual_transition_start_ts = 0.0
+            state.forced_dual_transition_start_ts = 0.0
         per_device = _calc_per_device_power(
-            state, ac_mode, distribution_power, max_power, cfg
+            state, ac_mode, distribution_power, max_power, cfg,
+            soc_boundary_active=soc_boundary_active,
+            previous_power_cmd_ts=previous_power_cmd_ts,
         )
-        per_device = apply_transition(per_device, state, now_ts, cfg.transition_timer)
+        if not soc_boundary_active:
+            per_device = apply_transition(
+                per_device, state, now_ts, cfg.transition_timer
+            )
 
     outbound_props = dict(props)
     _apply_aggregate_limit_props(outbound_props, state, devs, eligible)
@@ -373,6 +434,121 @@ async def execute_post(
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
+
+def _soc_boundary_min_device_power(cfg: Config) -> int:
+    return max(
+        0,
+        _int(getattr(cfg, "soc_boundary_min_device_power_watts", 100)),
+    )
+
+
+def _soc_boundary_command_indices(
+    state: ProxyState,
+    ac_mode: int,
+    eligible: list[int],
+    total_power: int,
+    max_power: int,
+    previous_power_cmd_ts: float,
+) -> list[int]:
+    if len(eligible) <= 1 or total_power <= 0:
+        return list(eligible)
+
+    devs = state.devices
+    levels = [devs[idx].electric_level for idx in eligible]
+    hold_idx: list[int] = []
+
+    if ac_mode == 1:
+        highest = max(levels)
+        if highest > SOC_LOCKSTEP_HIGH_THRESHOLD:
+            hold_idx = [
+                idx for idx in eligible
+                if devs[idx].electric_level == highest
+            ]
+    elif ac_mode == 2:
+        lowest = min(levels)
+        min_soc_pct = state.min_soc / 10.0
+        if lowest < min_soc_pct:
+            hold_idx = [
+                idx for idx in eligible
+                if devs[idx].electric_level == lowest
+            ]
+
+    if not hold_idx or len(hold_idx) >= len(eligible):
+        return list(eligible)
+
+    command_idx = [idx for idx in eligible if idx not in hold_idx]
+    capacity = sum(
+        _measured_power_capacity(
+            state, ac_mode, idx, max_power, previous_power_cmd_ts
+        )
+        for idx in command_idx
+    )
+    for idx in hold_idx:
+        if max_power <= 0:
+            break
+        if total_power <= capacity:
+            break
+        command_idx.append(idx)
+        capacity += _measured_power_capacity(
+            state, ac_mode, idx, max_power, previous_power_cmd_ts
+        )
+    return command_idx
+
+
+def _measured_power_capacities(
+    state: ProxyState,
+    ac_mode: int,
+    indices: list[int],
+    fallback_max_power: int,
+    previous_power_cmd_ts: float,
+) -> list[int]:
+    return [
+        _measured_power_capacity(
+            state, ac_mode, idx, fallback_max_power, previous_power_cmd_ts
+        )
+        for idx in indices
+    ]
+
+
+def _measured_power_capacity(
+    state: ProxyState,
+    ac_mode: int,
+    idx: int,
+    fallback_max_power: int,
+    previous_power_cmd_ts: float,
+) -> int:
+    fallback = max(0, _int(fallback_max_power))
+    if idx < 0 or idx >= len(state.devices):
+        return 0
+    dev = state.devices[idx]
+    previous_command = _int(getattr(dev, "latest_power_cmd", 0))
+    if not _same_direction_power_command(previous_command, ac_mode):
+        return fallback
+    if previous_power_cmd_ts <= 0:
+        return fallback
+    if getattr(dev, "last_successful_get_ts", 0.0) <= previous_power_cmd_ts:
+        return fallback
+
+    measured = _measured_device_power(state, ac_mode, idx)
+    if measured < abs(previous_command):
+        return measured
+    return fallback
+
+
+def _same_direction_power_command(power: int, ac_mode: int) -> bool:
+    return (ac_mode == 1 and power > 0) or (ac_mode == 2 and power < 0)
+
+
+def _measured_device_power(state: ProxyState, ac_mode: int, idx: int) -> int:
+    if idx < 0 or idx >= len(state.devices):
+        return 0
+    props = (state.devices[idx].last_response or {}).get("properties", {})
+    if ac_mode == 1:
+        return max(0, _int(props.get("packInputPower", 0)))
+    if ac_mode == 2:
+        return max(0, _int(props.get("outputPackPower", 0)))
+    return 0
+
 
 def _power_ac_mode(props: dict, current_ac_mode: int) -> int:
     if "acMode" in props:
@@ -789,6 +965,7 @@ def _select_active_devices(
     *,
     previous_active_count: int | None = None,
     eligible_indices: list[int] | None = None,
+    soc_diff_threshold: int | None = None,
 ) -> None:
     """Choose which specific device indices are active based on SoC."""
     devs = state.devices
@@ -808,12 +985,16 @@ def _select_active_devices(
     min_soc_pct = state.min_soc / 10.0
 
     # Tighten hysteresis threshold near SoC boundaries
-    diff_threshold = cfg.device_change_diff
+    diff_threshold = (
+        soc_diff_threshold
+        if soc_diff_threshold is not None
+        else cfg.device_change_diff
+    )
     at_boundary = any(devs[i].soc_limit == 2 for i in eligible) and any(
         devs[i].electric_level < min_soc_pct for i in eligible
     )
     if at_boundary or any(devs[i].soc_limit == 1 for i in eligible):
-        diff_threshold = 1
+        diff_threshold = min(diff_threshold, 1)
 
     if active_count >= n:
         state.devices_active_idx_previous = list(state.devices_active_idx)
@@ -881,6 +1062,9 @@ def _calc_per_device_power(
     total_power: int,
     max_power: int,
     cfg: Config,
+    *,
+    soc_boundary_active: bool = False,
+    previous_power_cmd_ts: float = 0.0,
 ) -> list[int]:
     """Calculate per-device power (W) using nonlinear SoC balancing."""
     devs = state.devices
@@ -902,7 +1086,12 @@ def _calc_per_device_power(
     active_avail = [avail[i] for i in active_idx]
     all_zero = sum(active_avail) == 0
 
-    if cfg.equal_mode or state.equal_mode or all_zero:
+    if soc_boundary_active:
+        power_active = _distribute_soc_boundary_power(
+            state, ac_mode, total_power, max_power, cfg, active_idx,
+            previous_power_cmd_ts,
+        )
+    elif cfg.equal_mode or state.equal_mode or all_zero:
         per = min(total_power // max(len(active_idx), 1), max_power)
         power_active = [per] * len(active_idx)
     else:
@@ -911,12 +1100,139 @@ def _calc_per_device_power(
         )
 
     # If headroom is zero for all devices, send 0 to avoid waking standby units
-    if all_zero:
+    if all_zero and not soc_boundary_active:
         power_active = [0] * len(active_idx)
 
     result = [0] * n
     for j, i in enumerate(active_idx):
         result[i] = power_active[j]
+    return result
+
+
+def _distribute_soc_boundary_power(
+    state: ProxyState,
+    ac_mode: int,
+    total_power: int,
+    max_power: int,
+    cfg: Config,
+    active_idx: list[int],
+    previous_power_cmd_ts: float,
+) -> list[int]:
+    if not active_idx or total_power <= 0:
+        return [0] * len(active_idx)
+
+    capacities = _measured_power_capacities(
+        state, ac_mode, active_idx, max_power, previous_power_cmd_ts
+    )
+    minimums = [
+        min(_soc_boundary_min_device_power(cfg), capacity)
+        for capacity in capacities
+    ]
+    if total_power < sum(minimums):
+        result = [0] * len(active_idx)
+        remaining = total_power
+        for pos, capacity in enumerate(capacities):
+            result[pos] = min(capacity, remaining)
+            remaining -= result[pos]
+            if remaining <= 0:
+                break
+        return result
+
+    base = list(minimums)
+    remaining = total_power - sum(base)
+    extra_capacities = [
+        max(0, capacity - power)
+        for capacity, power in zip(capacities, base)
+    ]
+    weights = _soc_boundary_weights(state, ac_mode, active_idx)
+    extra = _weighted_capped_int_distribution(
+        remaining, weights, extra_capacities
+    )
+    return [base_power + extra_power for base_power, extra_power in zip(base, extra)]
+
+
+def _soc_boundary_weights(
+    state: ProxyState,
+    ac_mode: int,
+    active_idx: list[int],
+) -> list[float]:
+    levels = [state.devices[idx].electric_level for idx in active_idx]
+    if not levels:
+        return []
+    if ac_mode == 1:
+        target = max(levels)
+        return [max(0.0, target - level) + 1.0 for level in levels]
+    if ac_mode == 2:
+        target = min(levels)
+        return [max(0.0, level - target) + 1.0 for level in levels]
+    return [1.0] * len(active_idx)
+
+
+def _weighted_capped_int_distribution(
+    total_power: int,
+    weights: list[float],
+    capacities: list[int],
+) -> list[int]:
+    n = len(weights)
+    if n == 0 or total_power <= 0:
+        return [0] * n
+
+    capacities = [max(0, _int(capacity)) for capacity in capacities]
+    total_capacity = sum(capacities)
+    target_total = min(total_power, total_capacity)
+    if target_total <= 0:
+        return [0] * n
+
+    weights = [max(0.0, float(weight)) for weight in weights]
+    allocation = [0.0] * n
+    remaining = float(target_total)
+
+    for _ in range(n + 1):
+        open_idx = [
+            idx for idx, capacity in enumerate(capacities)
+            if allocation[idx] < capacity
+        ]
+        if not open_idx or remaining < 0.5:
+            break
+        open_weight = sum(weights[idx] for idx in open_idx)
+        use_equal_weight = open_weight <= 0
+        if open_weight <= 0:
+            open_weight = float(len(open_idx))
+
+        distributed = 0.0
+        for idx in open_idx:
+            weight = 1.0 if use_equal_weight else weights[idx]
+            addition = remaining * (weight / open_weight)
+            actual = min(addition, capacities[idx] - allocation[idx])
+            allocation[idx] += actual
+            distributed += actual
+        if distributed < 0.5:
+            break
+        remaining -= distributed
+
+    result = [min(int(value), capacities[idx]) for idx, value in enumerate(allocation)]
+    remainder = target_total - sum(result)
+    order = sorted(
+        range(n),
+        key=lambda idx: (
+            allocation[idx] - int(allocation[idx]),
+            weights[idx],
+            -idx,
+        ),
+        reverse=True,
+    )
+    while remainder > 0:
+        changed = False
+        for idx in order:
+            if result[idx] >= capacities[idx]:
+                continue
+            result[idx] += 1
+            remainder -= 1
+            changed = True
+            if remainder <= 0:
+                break
+        if not changed:
+            break
     return result
 
 

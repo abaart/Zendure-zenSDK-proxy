@@ -236,6 +236,18 @@ zendure_proxy:
   singlemode_transition_timer: 40
 
   balancing_factor: 5
+  # Als een gezonde Zendure onder minSoc of boven 90% SoC zit, krijgt elke
+  # actieve Zendure minimaal soc_boundary_min_device_power_watts.
+  # Als de opdracht daarvoor te laag is, gebruikt execute_post(...) minder
+  # Zendures. Bij laden kan de hoogste SoC-Zendure 0 W krijgen totdat lagere
+  # SoC-Zendures bijtrekken. Bij ontladen kan de laagste SoC-Zendure 0 W krijgen.
+  # Extra vermogen gaat naar de Zendures die qua SoC moeten bijtrekken.
+  # Als een verse GET laat zien dat een actieve Zendure minder packInputPower of
+  # outputPackPower levert dan de laatste opdracht, compenseert execute_post(...)
+  # bij de volgende opdracht met de andere Zendures.
+  # Binnen die lage-vermogensrange wisselt execute_post(...) bij 1% SoC-verschil.
+  soc_boundary_min_device_power_watts: 100
+  soc_boundary_low_power_change_diff: 1
 
   dualmode_damper_enable: false
   dualmode_damper_timer: 120
