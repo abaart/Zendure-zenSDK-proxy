@@ -163,11 +163,16 @@ async def execute_post(
         not invalid_direction
         and soc_boundary_lockstep_active(state, eligible)
     )
+    soc_boundary_shortfall_compensation = (
+        soc_boundary_active
+        and not _soc_boundary_low_soc_active(state, eligible)
+    )
     soc_boundary_min_power = _soc_boundary_min_device_power(cfg)
     selection_eligible = (
         _soc_boundary_command_indices(
             state, ac_mode, eligible, distribution_power, max_power,
             previous_power_cmd_ts,
+            cfg.soc_boundary_low_power_change_diff,
         )
         if soc_boundary_active
         else eligible
@@ -211,7 +216,7 @@ async def execute_post(
                     state, ac_mode, selection_eligible, max_power,
                     previous_power_cmd_ts,
                 )
-                if soc_boundary_active
+                if soc_boundary_shortfall_compensation
                 else None
             ),
         )
@@ -274,6 +279,9 @@ async def execute_post(
             state, ac_mode, distribution_power, max_power, cfg,
             soc_boundary_active=soc_boundary_active,
             previous_power_cmd_ts=previous_power_cmd_ts,
+            soc_boundary_shortfall_compensation=(
+                soc_boundary_shortfall_compensation
+            ),
         )
         if not soc_boundary_active:
             per_device = apply_transition(
@@ -442,6 +450,18 @@ def _soc_boundary_min_device_power(cfg: Config) -> int:
     )
 
 
+def _soc_boundary_low_soc_active(
+    state: ProxyState,
+    eligible: list[int],
+) -> bool:
+    min_soc_pct = state.min_soc / 10.0
+    return any(
+        0 <= idx < len(state.devices)
+        and state.devices[idx].electric_level <= min_soc_pct
+        for idx in eligible
+    )
+
+
 def _soc_boundary_command_indices(
     state: ProxyState,
     ac_mode: int,
@@ -449,6 +469,7 @@ def _soc_boundary_command_indices(
     total_power: int,
     max_power: int,
     previous_power_cmd_ts: float,
+    low_soc_diff_threshold: int,
 ) -> list[int]:
     if len(eligible) <= 1 or total_power <= 0:
         return list(eligible)
@@ -458,6 +479,15 @@ def _soc_boundary_command_indices(
     hold_idx: list[int] = []
 
     if ac_mode == 1:
+        lowest = min(levels)
+        min_soc_pct = state.min_soc / 10.0
+        soc_diff = max(levels) - lowest
+        if lowest < min_soc_pct and soc_diff > max(0, low_soc_diff_threshold):
+            return [
+                idx for idx in eligible
+                if devs[idx].electric_level == lowest
+            ]
+
         highest = max(levels)
         if highest > SOC_LOCKSTEP_HIGH_THRESHOLD:
             hold_idx = [
@@ -1065,6 +1095,7 @@ def _calc_per_device_power(
     *,
     soc_boundary_active: bool = False,
     previous_power_cmd_ts: float = 0.0,
+    soc_boundary_shortfall_compensation: bool = True,
 ) -> list[int]:
     """Calculate per-device power (W) using nonlinear SoC balancing."""
     devs = state.devices
@@ -1090,6 +1121,7 @@ def _calc_per_device_power(
         power_active = _distribute_soc_boundary_power(
             state, ac_mode, total_power, max_power, cfg, active_idx,
             previous_power_cmd_ts,
+            soc_boundary_shortfall_compensation,
         )
     elif cfg.equal_mode or state.equal_mode or all_zero:
         per = min(total_power // max(len(active_idx), 1), max_power)
@@ -1117,38 +1149,128 @@ def _distribute_soc_boundary_power(
     cfg: Config,
     active_idx: list[int],
     previous_power_cmd_ts: float,
+    shortfall_compensation: bool,
 ) -> list[int]:
     if not active_idx or total_power <= 0:
         return [0] * len(active_idx)
 
-    capacities = _measured_power_capacities(
-        state, ac_mode, active_idx, max_power, previous_power_cmd_ts
-    )
+    command_capacities = [max(0, _int(max_power))] * len(active_idx)
     minimums = [
         min(_soc_boundary_min_device_power(cfg), capacity)
-        for capacity in capacities
+        for capacity in command_capacities
     ]
     if total_power < sum(minimums):
         result = [0] * len(active_idx)
         remaining = total_power
-        for pos, capacity in enumerate(capacities):
+        for pos, capacity in enumerate(command_capacities):
             result[pos] = min(capacity, remaining)
             remaining -= result[pos]
             if remaining <= 0:
                 break
-        return result
+        if not shortfall_compensation:
+            return result
+        return _apply_measured_shortfall_compensation(
+            state, ac_mode, result, command_capacities, active_idx,
+            previous_power_cmd_ts,
+        )
 
     base = list(minimums)
     remaining = total_power - sum(base)
     extra_capacities = [
         max(0, capacity - power)
-        for capacity, power in zip(capacities, base)
+        for capacity, power in zip(command_capacities, base)
     ]
     weights = _soc_boundary_weights(state, ac_mode, active_idx)
     extra = _weighted_capped_int_distribution(
         remaining, weights, extra_capacities
     )
-    return [base_power + extra_power for base_power, extra_power in zip(base, extra)]
+    result = [base_power + extra_power for base_power, extra_power in zip(base, extra)]
+    if not shortfall_compensation:
+        return result
+    return _apply_measured_shortfall_compensation(
+        state, ac_mode, result, command_capacities, active_idx,
+        previous_power_cmd_ts,
+    )
+
+
+def _apply_measured_shortfall_compensation(
+    state: ProxyState,
+    ac_mode: int,
+    command_power: list[int],
+    command_capacities: list[int],
+    active_idx: list[int],
+    previous_power_cmd_ts: float,
+) -> list[int]:
+    result = list(command_power)
+    if not result:
+        return result
+
+    shortfall = 0
+    underdelivering: set[int] = set()
+    for pos, idx in enumerate(active_idx):
+        if pos >= len(result):
+            break
+        measured = _fresh_measured_under_delivery(
+            state, ac_mode, idx, previous_power_cmd_ts
+        )
+        if measured is None:
+            continue
+        missing = max(0, result[pos] - measured)
+        if missing <= 0:
+            continue
+        shortfall += missing
+        underdelivering.add(pos)
+
+    if shortfall <= 0:
+        return result
+
+    target_positions = [
+        pos for pos in range(len(result))
+        if pos not in underdelivering
+        and pos < len(command_capacities)
+        and result[pos] < command_capacities[pos]
+    ]
+    if not target_positions:
+        return result
+
+    weights = _soc_boundary_weights(state, ac_mode, active_idx)
+    target_weights = [
+        weights[pos]
+        for pos in target_positions
+    ]
+    target_capacities = [
+        max(0, command_capacities[pos] - result[pos])
+        for pos in target_positions
+    ]
+    additions = _weighted_capped_int_distribution(
+        shortfall, target_weights, target_capacities
+    )
+    for pos, addition in zip(target_positions, additions):
+        result[pos] += addition
+    return result
+
+
+def _fresh_measured_under_delivery(
+    state: ProxyState,
+    ac_mode: int,
+    idx: int,
+    previous_power_cmd_ts: float,
+) -> int | None:
+    if idx < 0 or idx >= len(state.devices):
+        return None
+    dev = state.devices[idx]
+    previous_command = _int(getattr(dev, "latest_power_cmd", 0))
+    if not _same_direction_power_command(previous_command, ac_mode):
+        return None
+    if previous_power_cmd_ts <= 0:
+        return None
+    if getattr(dev, "last_successful_get_ts", 0.0) <= previous_power_cmd_ts:
+        return None
+
+    measured = _measured_device_power(state, ac_mode, idx)
+    if measured < abs(previous_command):
+        return measured
+    return None
 
 
 def _soc_boundary_weights(

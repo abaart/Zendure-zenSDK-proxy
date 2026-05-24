@@ -92,7 +92,12 @@ zendure_proxy:
   # Extra power goes to Zendures that need to catch up in SoC.
   # When a fresh GET shows that an active Zendure delivers less packInputPower or
   # outputPackPower than the last command, execute_post(...) compensates on the
-  # next command with the other Zendures.
+  # next command with the other Zendures. The underdelivering Zendure keeps its
+  # calculated command share, so the Zendure can still catch up when temperature
+  # or an internal limit recovers.
+  # Exception: measured compensation only runs when every Zendure is above
+  # minSoc. When charging below minSoc and SoC differs by more than 1%, the
+  # lowest-SoC Zendure gets the command alone, without higher-SoC compensation.
   # In the low-power range, execute_post(...) switches at 1% SoC difference.
   soc_boundary_min_device_power_watts: 100
   soc_boundary_low_power_change_diff: 1

@@ -163,17 +163,17 @@ def test_three_device_high_soc_uses_measured_charge_shortfall_before_held_device
                 ip="ip2",
                 sn="SN2",
                 electric_level=70,
-                latest_power_cmd=750,
+                latest_power_cmd=425,
                 last_successful_get_ts=fresh_get_ts,
                 last_response=_measured_response(pack_input_power=50),
             ),
             DeviceState(
                 ip="ip3",
                 sn="SN3",
-                electric_level=71,
-                latest_power_cmd=750,
+                electric_level=70,
+                latest_power_cmd=425,
                 last_successful_get_ts=fresh_get_ts,
-                last_response=_measured_response(pack_input_power=750),
+                last_response=_measured_response(pack_input_power=425),
             ),
         ],
         device_active_count=1,
@@ -197,12 +197,12 @@ def test_three_device_high_soc_uses_measured_charge_shortfall_before_held_device
     assert state.devices_active_idx == [1, 2]
     assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
         0,
-        50,
+        425,
         800,
     ]
 
 
-def test_three_device_low_soc_discharge_uses_measured_output_shortfall_before_held_device() -> None:
+def test_three_device_low_soc_discharge_does_not_use_measured_output_shortfall() -> None:
     previous_ts = now() - 20
     fresh_get_ts = now() - 10
     state = ProxyState(
@@ -220,17 +220,17 @@ def test_three_device_low_soc_discharge_uses_measured_output_shortfall_before_he
                 ip="ip2",
                 sn="SN2",
                 electric_level=35,
-                latest_power_cmd=-750,
+                latest_power_cmd=-425,
                 last_successful_get_ts=fresh_get_ts,
                 last_response=_measured_response(output_pack_power=50),
             ),
             DeviceState(
                 ip="ip3",
                 sn="SN3",
-                electric_level=34,
-                latest_power_cmd=-750,
+                electric_level=35,
+                latest_power_cmd=-425,
                 last_successful_get_ts=fresh_get_ts,
-                last_response=_measured_response(output_pack_power=750),
+                last_response=_measured_response(output_pack_power=425),
             ),
         ],
         device_active_count=1,
@@ -255,8 +255,103 @@ def test_three_device_low_soc_discharge_uses_measured_output_shortfall_before_he
     assert state.devices_active_idx == [1, 2]
     assert [client.post_payloads[0]["properties"]["outputLimit"] for client in clients] == [
         0,
-        50,
-        800,
+        425,
+        425,
+    ]
+
+
+def test_three_device_low_soc_charge_does_not_use_measured_charge_shortfall() -> None:
+    previous_ts = now() - 20
+    fresh_get_ts = now() - 10
+    state = ProxyState(
+        device_count=3,
+        devices=[
+            DeviceState(
+                ip="ip1",
+                sn="SN1",
+                electric_level=8,
+                latest_power_cmd=425,
+                last_successful_get_ts=fresh_get_ts,
+                last_response=_measured_response(pack_input_power=50),
+            ),
+            DeviceState(
+                ip="ip2",
+                sn="SN2",
+                electric_level=8,
+                latest_power_cmd=425,
+                last_successful_get_ts=fresh_get_ts,
+                last_response=_measured_response(pack_input_power=425),
+            ),
+            DeviceState(ip="ip3", sn="SN3", electric_level=9),
+        ],
+        device_active_count=3,
+        devices_active_idx=[0, 1, 2],
+        max_power_in=800,
+        min_soc=100,
+        latest_power_message_ts=previous_ts,
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 850}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 3
+    assert state.devices_active_idx == [0, 1, 2]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        320,
+        320,
+        210,
+    ]
+
+
+def test_three_device_low_soc_charge_spread_above_one_percent_uses_lowest_only() -> None:
+    previous_ts = now() - 20
+    fresh_get_ts = now() - 10
+    state = ProxyState(
+        device_count=3,
+        devices=[
+            DeviceState(
+                ip="ip1",
+                sn="SN1",
+                electric_level=4,
+                latest_power_cmd=150,
+                last_successful_get_ts=fresh_get_ts,
+                last_response=_measured_response(pack_input_power=50),
+            ),
+            DeviceState(ip="ip2", sn="SN2", electric_level=8),
+            DeviceState(ip="ip3", sn="SN3", electric_level=9),
+        ],
+        device_active_count=3,
+        devices_active_idx=[0, 1, 2],
+        max_power_in=800,
+        min_soc=100,
+        latest_power_message_ts=previous_ts,
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 150}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [0]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        150,
+        0,
+        0,
     ]
 
 
@@ -299,7 +394,7 @@ def test_three_device_high_soc_low_power_adds_device_after_measured_shortfall() 
     assert state.devices_active_idx == [1, 2]
     assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
         0,
-        50,
+        150,
         100,
     ]
 

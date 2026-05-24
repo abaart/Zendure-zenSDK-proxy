@@ -244,7 +244,12 @@ zendure_proxy:
   # Extra vermogen gaat naar de Zendures die qua SoC moeten bijtrekken.
   # Als een verse GET laat zien dat een actieve Zendure minder packInputPower of
   # outputPackPower levert dan de laatste opdracht, compenseert execute_post(...)
-  # bij de volgende opdracht met de andere Zendures.
+  # bij de volgende opdracht met de andere Zendures. De achterblijvende Zendure
+  # blijft wel zijn berekende aansturingsdeel krijgen, zodat de Zendure alsnog
+  # kan bijtrekken als de temperatuur of interne limiet herstelt.
+  # Uitzondering: meetwaarde-compensatie gebeurt alleen als alle Zendures boven
+  # minSoc staan. Bij laden onder minSoc en meer dan 1% SoC-verschil krijgt de
+  # laagste SoC-Zendure de opdracht alleen, zonder compensatie door hogere SoC's.
   # Binnen die lage-vermogensrange wisselt execute_post(...) bij 1% SoC-verschil.
   soc_boundary_min_device_power_watts: 100
   soc_boundary_low_power_change_diff: 1
