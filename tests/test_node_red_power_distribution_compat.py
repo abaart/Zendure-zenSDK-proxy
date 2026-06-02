@@ -4,7 +4,12 @@ import asyncio
 
 from zendure_proxy_config import Config
 from zendure_proxy_post_handler import execute_post
-from zendure_proxy_power import apply_transition, now
+from zendure_proxy_power import (
+    apply_transition,
+    effective_min_soc_pct,
+    now,
+    soc_boundary_lockstep_active,
+)
 from zendure_proxy_state import DeviceState, ProxyState
 
 from conftest import FakeDeviceClient
@@ -50,6 +55,17 @@ def test_single_to_dual_transition_uses_node_red_windows() -> None:
 
     assert apply_transition([500, 500], state, 110.0, 40) == [950, 50]
     assert apply_transition([500, 500], state, 131.0, 40) == [750, 250]
+
+
+def test_low_soc_boundary_uses_ten_percent_floor_when_device_min_soc_is_lower() -> None:
+    state = ProxyState(
+        device_count=1,
+        devices=[DeviceState(ip="ip1", electric_level=7)],
+        min_soc=50,
+    )
+
+    assert effective_min_soc_pct(state) == 10.0
+    assert soc_boundary_lockstep_active(state, [0])
 
 
 def test_three_device_active_selection_keeps_previous_when_soc_diff_is_small() -> None:

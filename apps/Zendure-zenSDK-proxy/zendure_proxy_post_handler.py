@@ -28,6 +28,7 @@ from zendure_proxy_power import (
     apply_transition,
     calc_active_count,
     distribute_power,
+    effective_min_soc_pct,
     now,
     soc_boundary_lockstep_active,
 )
@@ -467,7 +468,7 @@ def _soc_boundary_low_soc_active(
     state: ProxyState,
     eligible: list[int],
 ) -> bool:
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
     return any(
         0 <= idx < len(state.devices)
         and state.devices[idx].electric_level <= min_soc_pct
@@ -493,7 +494,7 @@ def _soc_boundary_command_indices(
 
     if ac_mode == 1:
         lowest = min(levels)
-        min_soc_pct = state.min_soc / 10.0
+        min_soc_pct = effective_min_soc_pct(state)
         soc_diff = max(levels) - lowest
         if lowest < min_soc_pct and soc_diff >= max(0, low_soc_diff_threshold):
             return [
@@ -509,7 +510,7 @@ def _soc_boundary_command_indices(
             ]
     elif ac_mode == 2:
         lowest = min(levels)
-        min_soc_pct = state.min_soc / 10.0
+        min_soc_pct = effective_min_soc_pct(state)
         if lowest < min_soc_pct:
             hold_idx = [
                 idx for idx in eligible
@@ -883,7 +884,7 @@ def _low_soc_charge_priority_indices(
     if len(valid) <= 1:
         return set(valid)
 
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
     levels = [devs[idx].electric_level for idx in valid]
     lowest = min(levels)
     if lowest >= min_soc_pct:
@@ -1090,7 +1091,7 @@ def _select_active_devices(
         return
     active_count = min(state.device_active_count, n)
     state.device_active_count = active_count
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
 
     # Tighten hysteresis threshold near SoC boundaries
     diff_threshold = (
@@ -1205,7 +1206,7 @@ def _calc_per_device_power(
     devs = state.devices
     n = state.device_count
     active_idx = state.devices_active_idx
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
     soc_set_pct = state.soc_set / 10.0
 
     avail = [0.0] * n

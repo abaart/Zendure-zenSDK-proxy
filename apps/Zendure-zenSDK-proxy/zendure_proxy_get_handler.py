@@ -293,43 +293,16 @@ def build_combined_response(
     props["solarInputPower"] = _sum("solarInputPower")
     props["gridOffPower"] = _sum("gridOffPower")
 
-    # ── electricLevel: average with minSoc edge-case correction ───────────────
+    # ── electricLevel: average raw SoC values from the device reports ─────────
     n = len(included)
     soc = [devs[i].electric_level for i in included]
-    sc = [devs[i].soc_limit for i in included]
-    min_soc_pct = state.min_soc / 10.0
 
     if n == 0:
         props["electricLevel"] = 0
     elif n == 1:
         props["electricLevel"] = soc[0]
-    elif n == 2:
-        eA, eB = float(soc[0]), float(soc[1])
-        # If exactly one device hit the discharge limit, clamp it to minSoc so
-        # the average doesn't mislead the other device's charging behaviour.
-        if (sc[0] == 2) != (sc[1] == 2):
-            if sc[0] == 2:
-                eA = min_soc_pct
-            else:
-                eB = min_soc_pct
-            rnd = math.ceil if eA <= min_soc_pct + 1 and eB <= min_soc_pct + 1 else math.floor
-            props["electricLevel"] = rnd((eA + eB) / 2)
-        else:
-            props["electricLevel"] = math.floor((eA + eB) / 2)
     else:
-        corrected_soc = [float(v) for v in soc]
-        limit_count = 0
-        for i, limit in enumerate(sc):
-            if limit == 2:
-                corrected_soc[i] = min_soc_pct
-                limit_count += 1
-        if (
-            limit_count == 2
-            and all(v <= min_soc_pct + 2 for v in corrected_soc)
-        ):
-            props["electricLevel"] = math.ceil(sum(corrected_soc) / n)
-        else:
-            props["electricLevel"] = math.floor(sum(corrected_soc) / n)
+        props["electricLevel"] = math.floor(sum(float(value) for value in soc) / n)
 
     # ── SoC limits ─────────────────────────────────────────────────────────────
     props["minSoc"] = (

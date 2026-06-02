@@ -448,6 +448,41 @@ def test_anti_pingpong_requires_reserve_soc_margin() -> None:
     }
 
 
+def test_anti_pingpong_reserve_margin_uses_ten_percent_floor() -> None:
+    state = _state(2)
+    state.anti_pingpong_active = True
+    state.min_soc = 50
+    state.devices[0].electric_level = 14
+    state.devices[1].electric_level = 14
+    clients = [FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 500}},
+            clients,
+            state,
+            Config(
+                device_ips=["ip1", "ip2"],
+                anti_pingpong_enable=True,
+                anti_pingpong_activation_mode="smart",
+                anti_pingpong_reserve_soc_margin_percent=5,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.anti_pingpong_reserve_idx == []
+    assert state.anti_pingpong_last_reason == "no_reserve_soc_margin"
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        500,
+        0,
+    ]
+    assert all(
+        client.post_payloads[0]["properties"].get("outputLimit", 0) == 0
+        for client in clients
+    )
+
+
 def test_anti_pingpong_capacity_fallback_uses_existing_distribution() -> None:
     state = _state(2)
     state.anti_pingpong_active = True
@@ -727,6 +762,44 @@ def test_relay_saver_does_not_charge_device_above_min_soc_when_other_device_is_l
         0,
     ]
     assert [device.latest_power_cmd for device in state.devices] == [0, 50, 0]
+    assert state.relay_saver_paused_idx == []
+    assert state.relay_saver_until_ts_by_idx == {}
+
+
+def test_low_soc_charge_uses_ten_percent_floor_when_device_min_soc_is_lower() -> None:
+    state = _state(3)
+    state.min_soc = 50
+    state.max_power_in = 1200
+    state.ac_mode = 1
+    state.devices[0].electric_level = 15
+    state.devices[1].electric_level = 7
+    state.devices[2].electric_level = 7
+    state.devices[0].latest_power_cmd = 1000
+    state.single_mode_active_device = 0
+    state.devices_active_idx = [0]
+    state.device_active_count = 1
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 1200}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], relay_saver_enable=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 2
+    assert state.devices_active_idx == [1, 2]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        600,
+        600,
+    ]
+    assert [device.latest_power_cmd for device in state.devices] == [0, 600, 600]
+    assert state.single_to_dual_transition_start_ts == 0.0
+    assert state.transition_start_ts == 0.0
     assert state.relay_saver_paused_idx == []
     assert state.relay_saver_until_ts_by_idx == {}
 

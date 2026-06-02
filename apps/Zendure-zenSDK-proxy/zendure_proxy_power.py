@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zendure_proxy_state import ProxyState
 
-PROXY_VERSION = "v0.1.24"
+PROXY_VERSION = "v0.1.25"
+SOC_LOCKSTEP_LOW_THRESHOLD = 10.0
 SOC_LOCKSTEP_HIGH_THRESHOLD = 90.0
 
 
@@ -94,6 +95,11 @@ def distribute_power(
 
 # ── Active-device count ────────────────────────────────────────────────────────
 
+def effective_min_soc_pct(state: ProxyState) -> float:
+    """Return the low-SoC protection threshold in percent."""
+    return max(state.min_soc / 10.0, SOC_LOCKSTEP_LOW_THRESHOLD)
+
+
 def soc_boundary_lockstep_active(
     state: ProxyState,
     eligible_indices: list[int] | None = None,
@@ -104,7 +110,7 @@ def soc_boundary_lockstep_active(
         if eligible_indices is not None
         else list(range(state.device_count))
     )
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
     for idx in indices:
         if idx < 0 or idx >= len(state.devices):
             continue
@@ -135,7 +141,7 @@ def calc_active_count(
     indices = eligible_indices if eligible_indices is not None else list(range(state.device_count))
     n = len(indices)
     devs = [state.devices[idx] for idx in indices]
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
     prev = min(state.device_active_count, max(n, 1))
 
     if n <= 0:

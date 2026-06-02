@@ -7,7 +7,7 @@ from zendure_proxy_state import DeviceState, ProxyState
 
 from conftest import device_response
 from node_red_expected import (
-    THREE_DEVICE_ELECTRIC_LEVEL_WITH_TWO_EMPTY,
+    THREE_DEVICE_ELECTRIC_LEVEL_RAW_AVERAGE,
     TWO_DEVICE_AGGREGATES,
 )
 
@@ -100,7 +100,7 @@ def test_combined_response_uses_node_red_aggregate_rules_for_two_devices() -> No
         assert key in response["properties"]
 
 
-def test_three_device_electric_level_matches_node_red_empty_limit_correction() -> None:
+def test_three_device_electric_level_reports_raw_device_soc_values() -> None:
     results = [
         device_response(1, "SN1", properties={"electricLevel": 8, "socLimit": 2}),
         device_response(2, "SN2", properties={"electricLevel": 9, "socLimit": 2}),
@@ -113,9 +113,10 @@ def test_three_device_electric_level_matches_node_red_empty_limit_correction() -
         Config(device_ips=["ip1", "ip2", "ip3"]),
     )
 
-    assert response["properties"]["electricLevel"] == (
-        THREE_DEVICE_ELECTRIC_LEVEL_WITH_TWO_EMPTY
-    )
+    assert response["properties"]["electricLevel"] == THREE_DEVICE_ELECTRIC_LEVEL_RAW_AVERAGE
+    assert response["properties"]["electricLevel_1"] == 8
+    assert response["properties"]["electricLevel_2"] == 9
+    assert response["properties"]["electricLevel_3"] == 11
 
 
 def test_smart_mode_uses_max_when_a_device_is_in_proxy_standby() -> None:

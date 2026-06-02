@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from zendure_proxy_power import effective_min_soc_pct
+
 if TYPE_CHECKING:
     from zendure_proxy_config import Config
     from zendure_proxy_state import ProxyState
@@ -362,7 +364,7 @@ def _reserve_candidates(
 ) -> list[int]:
     devs = state.devices
     margin = max(0, int(getattr(cfg, "anti_pingpong_reserve_soc_margin_percent", 5)))
-    min_soc_pct = state.min_soc / 10.0
+    min_soc_pct = effective_min_soc_pct(state)
     soc_set_pct = state.soc_set / 10.0
     if ac_mode == 1:
         candidates = [
