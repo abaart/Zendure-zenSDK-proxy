@@ -699,6 +699,69 @@ def test_relay_saver_holds_previous_charge_before_zero_power() -> None:
     assert state.relay_saver_last_reason == "large_drop_to_zero"
 
 
+def test_relay_saver_does_not_charge_device_above_min_soc_when_other_device_is_low() -> None:
+    state = _state(3)
+    state.min_soc = 100
+    state.ac_mode = 1
+    state.devices[0].electric_level = 15
+    state.devices[1].electric_level = 6
+    state.devices[2].electric_level = 7
+    state.devices[0].latest_power_cmd = 1000
+    state.single_mode_active_device = 0
+    state.devices_active_idx = [0]
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 50}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], relay_saver_enable=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        50,
+        0,
+    ]
+    assert [device.latest_power_cmd for device in state.devices] == [0, 50, 0]
+    assert state.relay_saver_paused_idx == []
+    assert state.relay_saver_until_ts_by_idx == {}
+
+
+def test_relay_saver_is_disabled_while_device_is_above_high_soc_boundary() -> None:
+    state = _state(3)
+    state.ac_mode = 1
+    state.devices[0].electric_level = 91
+    state.devices[1].electric_level = 70
+    state.devices[2].electric_level = 70
+    state.devices[0].latest_power_cmd = 1000
+    state.single_mode_active_device = 0
+    state.devices_active_idx = [0]
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 50}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], relay_saver_enable=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        50,
+        0,
+    ]
+    assert [device.latest_power_cmd for device in state.devices] == [0, 50, 0]
+    assert state.relay_saver_paused_idx == []
+    assert state.relay_saver_until_ts_by_idx == {}
+
+
 def test_relay_saver_uses_80_watts_for_high_power_devices() -> None:
     state = _state(1)
     state.max_power_in = 1200
@@ -1424,7 +1487,7 @@ def test_low_power_below_min_soc_charge_uses_low_device_only() -> None:
 
     asyncio.run(
         execute_post(
-            {"properties": {"acMode": 1, "inputLimit": 150}},
+            {"properties": {"acMode": 1, "inputLimit": 250}},
             clients,
             state,
             Config(device_ips=["ip1", "ip2"], device_change_diff=5),
@@ -1435,7 +1498,7 @@ def test_low_power_below_min_soc_charge_uses_low_device_only() -> None:
     assert state.device_active_count == 1
     assert state.devices_active_idx == [0]
     assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
-        150,
+        250,
         0,
     ]
 

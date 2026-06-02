@@ -260,7 +260,7 @@ def test_three_device_low_soc_discharge_does_not_use_measured_output_shortfall()
     ]
 
 
-def test_three_device_low_soc_charge_does_not_use_measured_charge_shortfall() -> None:
+def test_three_device_low_soc_charge_holds_one_percent_higher_device_at_zero() -> None:
     previous_ts = now() - 20
     fresh_get_ts = now() - 10
     state = ProxyState(
@@ -302,12 +302,93 @@ def test_three_device_low_soc_charge_does_not_use_measured_charge_shortfall() ->
         )
     )
 
-    assert state.device_active_count == 3
-    assert state.devices_active_idx == [0, 1, 2]
+    assert state.device_active_count == 2
+    assert state.devices_active_idx == [0, 1]
     assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
-        320,
-        320,
-        210,
+        425,
+        425,
+        0,
+    ]
+
+
+def test_three_device_low_soc_small_charge_rotates_between_equal_low_devices() -> None:
+    state = ProxyState(
+        device_count=3,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", electric_level=8),
+            DeviceState(ip="ip2", sn="SN2", electric_level=8),
+            DeviceState(ip="ip3", sn="SN3", electric_level=10),
+        ],
+        device_active_count=3,
+        devices_active_idx=[0, 1, 2],
+        max_power_in=800,
+        min_soc=100,
+    )
+    cfg = Config(device_ips=["ip1", "ip2", "ip3"], device_change_diff=5)
+
+    first_clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 50}},
+            first_clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    second_clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 50}},
+            second_clients,
+            state,
+            cfg,
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert [
+        client.post_payloads[0]["properties"]["inputLimit"]
+        for client in first_clients
+    ] == [50, 0, 0]
+    assert [
+        client.post_payloads[0]["properties"]["inputLimit"]
+        for client in second_clients
+    ] == [0, 50, 0]
+
+
+def test_three_device_low_soc_small_charge_skips_device_above_min_soc() -> None:
+    state = ProxyState(
+        device_count=3,
+        devices=[
+            DeviceState(ip="ip1", sn="SN1", electric_level=15),
+            DeviceState(ip="ip2", sn="SN2", electric_level=6),
+            DeviceState(ip="ip3", sn="SN3", electric_level=7),
+        ],
+        device_active_count=3,
+        devices_active_idx=[0, 1, 2],
+        max_power_in=800,
+        min_soc=100,
+    )
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 50}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], device_change_diff=5),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 1
+    assert state.devices_active_idx == [1]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        50,
+        0,
     ]
 
 

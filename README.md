@@ -248,8 +248,11 @@ zendure_proxy:
   # blijft wel zijn berekende aansturingsdeel krijgen, zodat de Zendure alsnog
   # kan bijtrekken als de temperatuur of interne limiet herstelt.
   # Uitzondering: meetwaarde-compensatie gebeurt alleen als alle Zendures boven
-  # minSoc staan. Bij laden onder minSoc en meer dan 1% SoC-verschil krijgt de
-  # laagste SoC-Zendure de opdracht alleen, zonder compensatie door hogere SoC's.
+  # minSoc staan. Bij laden onder minSoc en 1% SoC-verschil of meer krijgen alleen
+  # de laagste SoC-Zendures de opdracht, zonder compensatie door hogere SoC's.
+  # Bij gelijke lage SoC en kleine laadopdrachten wisselt execute_post(...) tussen
+  # de even lage Zendures, zodat één Zendure niet boven 10% wegloopt terwijl
+  # andere Zendures onder minSoc blijven.
   # Binnen die lage-vermogensrange wisselt execute_post(...) bij 1% SoC-verschil.
   soc_boundary_min_device_power_watts: 100
   soc_boundary_low_power_change_diff: 1
@@ -398,6 +401,10 @@ minder vaak een volledige aan/uit-wissel veroorzaken. Daardoor kan de Zendure
 sneller weer opschalen wanneer de piek verdwijnt. Het nadeel is dat de Zendure
 30 seconden langer een klein laad- of ontlaadvermogen kan gebruiken dan Home
 Assistant vroeg. Het extra minimumvermogen kost een beetje energie.
+
+SoC-bescherming heeft voorrang op relay saver. Wanneer één of meer Zendures onder
+`minSoc` staan, of wanneer één of meer Zendures boven de hoge SoC-grens staan,
+gebruikt `execute_post(...)` relay saver niet.
 
 Reserve mode heeft voorrang. `anti_pingpong_*` payloads worden eerst bepaald.
 Relay saver mode verandert alleen devices waarvoor reserve mode geen eigen

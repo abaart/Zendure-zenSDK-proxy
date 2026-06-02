@@ -342,9 +342,13 @@ async def execute_post(
     desired_signed_power = _desired_signed_power_by_device(
         ac_mode, per_device, anti_payloads, anti_signed_power
     )
-    relay_payloads = _relay_saver_payloads(
-        state, cfg, desired_signed_power, anti_payloads, invalid_direction, now_ts
-    )
+    if soc_boundary_active:
+        _clear_relay_saver_state(state)
+        relay_payloads = {}
+    else:
+        relay_payloads = _relay_saver_payloads(
+            state, cfg, desired_signed_power, anti_payloads, invalid_direction, now_ts
+        )
     relay_signed_power = [
         _payload_signed_power(relay_payloads.get(i, {}))
         for i in range(n)
@@ -369,12 +373,7 @@ async def execute_post(
             pwr = per_device[i]
         wake_standby_device = (
             not invalid_direction
-            and (
-                pwr != 0
-                or i in state.anti_pingpong_reserve_idx
-                or i in state.anti_pingpong_paused_idx
-                or i in state.relay_saver_paused_idx
-            )
+            and pwr != 0
             and getattr(devs[i], "standby_device", False)
         )
         if anti_owns_device:
@@ -392,6 +391,26 @@ async def execute_post(
         for k, v in outbound_props.items():
             if k not in _POWER_KEYS:
                 dp[k] = v
+        low_soc_charge_suppressed = _suppress_low_soc_charge_priority(
+            state, cfg, eligible, i, dp
+        )
+        signed_power = _payload_signed_power_with_default(dp, ac_mode)
+        pwr = abs(signed_power)
+        wake_standby_device = (
+            not invalid_direction
+            and (
+                pwr != 0
+                or (
+                    not low_soc_charge_suppressed
+                    and (
+                        i in state.anti_pingpong_reserve_idx
+                        or i in state.anti_pingpong_paused_idx
+                        or i in state.relay_saver_paused_idx
+                    )
+                )
+            )
+            and getattr(devs[i], "standby_device", False)
+        )
         if wake_standby_device:
             dp["smartMode"] = 1
             devs[i].smart_mode = 1
@@ -403,12 +422,6 @@ async def execute_post(
             device_payload["sn"] = devs[i].sn
         if not _suppress_standby_post(devs[i], dp):
             tasks.append(client.post(device_payload))
-        if anti_owns_device:
-            signed_power = anti_signed_power[i]
-        elif relay_owns_device:
-            signed_power = relay_signed_power[i]
-        else:
-            signed_power = _signed_power_cmd(ac_mode, pwr)
         _record_device_power_command(devs[i], signed_power, now_ts)
 
     removed_active = set(prev_active_idx) - set(state.devices_active_idx)
@@ -482,7 +495,7 @@ def _soc_boundary_command_indices(
         lowest = min(levels)
         min_soc_pct = state.min_soc / 10.0
         soc_diff = max(levels) - lowest
-        if lowest < min_soc_pct and soc_diff > max(0, low_soc_diff_threshold):
+        if lowest < min_soc_pct and soc_diff >= max(0, low_soc_diff_threshold):
             return [
                 idx for idx in eligible
                 if devs[idx].electric_level == lowest
@@ -821,6 +834,71 @@ def _payload_signed_power(payload: dict) -> int:
     return 0
 
 
+def _payload_signed_power_with_default(payload: dict, default_ac_mode: int) -> int:
+    payload_with_mode = dict(payload)
+    payload_with_mode["acMode"] = _int(payload_with_mode.get("acMode", default_ac_mode))
+    return _payload_signed_power(payload_with_mode)
+
+
+def _suppress_low_soc_charge_priority(
+    state: ProxyState,
+    cfg: Config,
+    eligible: list[int],
+    idx: int,
+    payload: dict,
+) -> bool:
+    if _int(payload.get("inputLimit", 0)) <= 0:
+        return False
+
+    allowed = _low_soc_charge_priority_indices(
+        state,
+        eligible,
+        getattr(cfg, "soc_boundary_low_power_change_diff", 1),
+    )
+    if idx in allowed:
+        return False
+
+    payload["inputLimit"] = 0
+    state.anti_pingpong_paused_idx = [
+        paused_idx for paused_idx in state.anti_pingpong_paused_idx
+        if paused_idx != idx
+    ]
+    state.relay_saver_paused_idx = [
+        paused_idx for paused_idx in state.relay_saver_paused_idx
+        if paused_idx != idx
+    ]
+    _clear_relay_saver_device(state, idx)
+    if not state.relay_saver_paused_idx and not state.relay_saver_until_ts_by_idx:
+        state.relay_saver_last_reason = ""
+    return True
+
+
+def _low_soc_charge_priority_indices(
+    state: ProxyState,
+    eligible: list[int],
+    low_soc_diff_threshold: int,
+) -> set[int]:
+    devs = state.devices
+    valid = [idx for idx in eligible if 0 <= idx < len(devs)]
+    if len(valid) <= 1:
+        return set(valid)
+
+    min_soc_pct = state.min_soc / 10.0
+    levels = [devs[idx].electric_level for idx in valid]
+    lowest = min(levels)
+    if lowest >= min_soc_pct:
+        return set(valid)
+
+    soc_diff = max(levels) - lowest
+    if soc_diff < max(0, low_soc_diff_threshold):
+        return set(valid)
+
+    return {
+        idx for idx in valid
+        if devs[idx].electric_level == lowest
+    }
+
+
 def _desired_signed_power_by_device(
     ac_mode: int,
     per_device: list[int],
@@ -1033,12 +1111,27 @@ def _select_active_devices(
 
     previous = [idx for idx in state.devices_active_idx if idx in eligible]
 
-    # Rank by SoC: lowest first for charging, highest first for discharging
-    ranked = sorted(
-        eligible,
-        key=lambda i: devs[i].electric_level,
-        reverse=(ac_mode == 2),
+    low_soc_charge_tie_break = (
+        ac_mode == 1
+        and len(eligible) > 1
+        and any(devs[i].electric_level < min_soc_pct for i in eligible)
     )
+    if low_soc_charge_tie_break:
+        ranked = sorted(
+            eligible,
+            key=lambda i: (
+                devs[i].electric_level,
+                _previous_same_direction_power(devs[i], ac_mode),
+                i,
+            ),
+        )
+    else:
+        # Rank by SoC: lowest first for charging, highest first for discharging
+        ranked = sorted(
+            eligible,
+            key=lambda i: devs[i].electric_level,
+            reverse=(ac_mode == 2),
+        )
 
     if active_count == 1:
         if n == 2 and ac_mode == 1 and sum(devs[i].soc_limit == 1 for i in eligible) == 1:
@@ -1060,6 +1153,8 @@ def _select_active_devices(
                 and previous_active_count != active_count
             ) or (
                 n == 2 and all(devs[i].smart_mode == 0 for i in eligible)
+            ) or (
+                low_soc_charge_tie_break and best != current
             )
             if (
                 abs(devs[best].electric_level - devs[current].electric_level)
@@ -1084,6 +1179,15 @@ def _select_active_devices(
         else:
             state.devices_active_idx = ranked[:active_count]
     state.devices_active_idx_previous = previous
+
+
+def _previous_same_direction_power(dev, ac_mode: int) -> int:
+    power = _int(getattr(dev, "latest_power_cmd", 0))
+    if ac_mode == 1 and power > 0:
+        return power
+    if ac_mode == 2 and power < 0:
+        return abs(power)
+    return 0
 
 
 def _calc_per_device_power(
