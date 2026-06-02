@@ -77,6 +77,11 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
                 props.get(f"outputHomePower_{idx}", 0),
             )
         )
+        smart_mode_value = (
+            "unavailable"
+            if slot_unavailable
+            else props.get(f"smartMode_{idx}", "unknown")
+        )
         add(
             f"sensor.zendure_{idx}_vermogen_aansturing",
             directed_power,
@@ -89,8 +94,10 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
         add(
             f"sensor.zendure_{idx}_modus",
             mode,
-            f"Zendure {idx} Modus",
+            f"Zendure {idx} Vermogensmodus",
             icon=_power_mode_icon(mode),
+            mode_basis="gridInputPower/outputHomePower",
+            deep_standby_entity_id=f"sensor.zendure_{idx}_deep_standby",
         )
         add(
             f"sensor.zendure_{idx}_relais_stand",
@@ -110,12 +117,23 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             f"sensor.zendure_{idx}_opslagmodus",
             "unavailable"
             if slot_unavailable
-            else _map_int(
-                    props.get(f"smartMode_{idx}", 0),
-                    {1: "Opslaan in RAM", 0: "Opslaan in Flash"},
-            ),
+            else _storage_mode(smart_mode_value),
             f"Zendure {idx} Opslagmodus",
             icon="mdi:floppy",
+            smart_mode=smart_mode_value,
+        )
+        deep_standby = (
+            "unavailable"
+            if slot_unavailable
+            else _deep_standby_state(smart_mode_value)
+        )
+        add(
+            f"sensor.zendure_{idx}_deep_standby",
+            deep_standby,
+            f"Zendure {idx} Deep Standby",
+            icon=_deep_standby_icon(deep_standby),
+            smart_mode=smart_mode_value,
+            source_entity_id=f"sensor.zendure_{idx}_opslagmodus",
         )
         soc_limit = (
             "unavailable"
@@ -385,15 +403,31 @@ def _power_mode(power: Any) -> str:
         return "Opladen"
     if value < 0:
         return "Ontladen"
-    return "Standby"
+    return "Geen vermogen"
 
 
 def _power_mode_icon(state: str) -> str:
     return {
         "Opladen": "mdi:battery-plus-variant",
         "Ontladen": "mdi:battery-minus-variant",
-        "Standby": "mdi:battery-outline",
+        "Geen vermogen": "mdi:power-plug-off",
     }.get(state, "mdi:battery-outline")
+
+
+def _storage_mode(value: Any) -> str:
+    return _map_int(value, {1: "Opslaan in RAM", 0: "Opslaan in Flash"})
+
+
+def _deep_standby_state(value: Any) -> str:
+    return _map_int(value, {1: "Uit", 0: "Aan"})
+
+
+def _deep_standby_icon(state: str) -> str:
+    return {
+        "Aan": "mdi:sleep",
+        "Uit": "mdi:sleep-off",
+        "Onbekend": "mdi:help-circle-outline",
+    }.get(state, "mdi:sleep")
 
 
 def _relay_state(value: Any) -> str:

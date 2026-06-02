@@ -20,9 +20,13 @@ class CloseTrackingFakeDeviceClient(FakeDeviceClient):
     def __init__(self, get_response: dict | None = None):
         super().__init__(get_response)
         self.close_post_connection_calls = 0
+        self.close_get_connection_calls = 0
 
     async def close_post_connection(self) -> None:
         self.close_post_connection_calls += 1
+
+    async def close_get_connection(self) -> None:
+        self.close_get_connection_calls += 1
 
 
 def _repeat_state(device_count: int = 2) -> ProxyState:
@@ -114,6 +118,7 @@ def test_delayed_standby_posts_smartmode_and_zero_power_properties() -> None:
         {"sn": "SN2", "properties": STANDBY_POST_PROPERTIES}
     ]
     assert standby_client.close_post_connection_calls == 1
+    assert standby_client.close_get_connection_calls == 1
     assert state.devices[1].standby_device is True
 
 

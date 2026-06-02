@@ -545,6 +545,67 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(proxy._proxy_ha_sensor_refresh_in_progress)
         self.assertEqual(standby_checks, 1)
 
+    async def test_refresh_proxy_ha_sensors_keeps_getting_proxy_standby_device(
+        self,
+    ) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(device_ips=["ip1", "ip2"])
+        proxy._state = ProxyState(
+            device_count=2,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1", smart_mode=1),
+                DeviceState(
+                    ip="ip2",
+                    sn="SN2",
+                    smart_mode=0,
+                    standby_device=True,
+                ),
+            ],
+            startup_ts=100.0,
+            devices_active_idx=[0],
+        )
+        proxy._clients = [
+            _MutableGetClient(_device(1, "SN1")),
+            _MutableGetClient(_device(2, "SN2")),
+        ]
+        proxy._metrics = _FakeMetrics()
+        proxy._proxy_ha_sensor_refresh_in_progress = False
+        published_responses: list[dict] = []
+
+        async def publish_report_sensors(
+            response: dict,
+            *,
+            force_health_sensor_refresh: bool = False,
+        ) -> None:
+            published_responses.append(response)
+
+        proxy._publish_report_sensors = publish_report_sensors
+        proxy._standby_check = _noop_record_depths
+        proxy._mark_passive_zero_timestamps = lambda: None
+        proxy._proxy_log = lambda *args, **kwargs: None
+
+        await proxy._refresh_proxy_ha_sensors()
+
+        self.assertEqual(proxy._clients[0].get_calls, 1)
+        self.assertEqual(proxy._clients[1].get_calls, 1)
+        self.assertEqual(
+            published_responses[0]["proxyHealth"]["reason"],
+            "fresh",
+        )
+        self.assertEqual(
+            published_responses[0]["proxyHealth"]["healthyCount"],
+            2,
+        )
+        self.assertEqual(
+            published_responses[0]["proxyHealth"]["unhealthyDevices"],
+            [],
+        )
+        self.assertEqual(published_responses[0]["proxyHealth"]["deadDevices"], [])
+        self.assertEqual(
+            published_responses[0]["properties"]["smartMode_2"],
+            1,
+        )
+
     async def test_refresh_proxy_ha_sensors_skips_overlap(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
         proxy._cfg = Config(device_ips=["ip1"])
@@ -892,10 +953,43 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(sensors["sensor.zendure_1_modus"][0], "Opladen")
         self.assertEqual(sensors["sensor.zendure_1_relais_stand"][0], "Oplaadstand")
-        self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Standby")
+        self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Geen vermogen")
         self.assertEqual(sensors["sensor.zendure_2_relais_stand"][0], "Standby")
         self.assertEqual(sensors["sensor.zendure_3_modus"][0], "Ontladen")
         self.assertEqual(sensors["sensor.zendure_3_relais_stand"][0], "Ontlaadstand")
+
+    def test_proxy_sensor_builder_distinguishes_zero_power_from_deep_standby(
+        self,
+    ) -> None:
+        response = _combined_three_device_response()
+        response["properties"]["gridInputPower_2"] = 0
+        response["properties"]["outputHomePower_2"] = 0
+        response["properties"]["smartMode_2"] = 0
+
+        sensors = build_proxy_ha_sensors(response)
+
+        self.assertEqual(sensors["sensor.zendure_2_modus"][0], "Geen vermogen")
+        self.assertEqual(
+            sensors["sensor.zendure_2_opslagmodus"][0],
+            "Opslaan in Flash",
+        )
+        self.assertEqual(sensors["sensor.zendure_2_deep_standby"][0], "Aan")
+
+    def test_proxy_sensor_builder_marks_unknown_smart_mode_as_unknown(self) -> None:
+        sensors = build_proxy_ha_sensors(
+            {
+                "properties": {
+                    "gridInputPower_1": 0,
+                    "outputHomePower_1": 0,
+                },
+                "packData": [],
+                "proxyHealth": {"configuredCount": 1},
+            }
+        )
+
+        self.assertEqual(sensors["sensor.zendure_1_modus"][0], "Geen vermogen")
+        self.assertEqual(sensors["sensor.zendure_1_opslagmodus"][0], "Onbekend")
+        self.assertEqual(sensors["sensor.zendure_1_deep_standby"][0], "Onbekend")
 
     def test_combined_response_recovers_power_command_after_restart(self) -> None:
         results = [
@@ -1628,8 +1722,10 @@ class _DelayedGetClient:
 class _MutableGetClient:
     def __init__(self, response: dict | None):
         self.response = response
+        self.get_calls = 0
 
     async def get(self) -> dict | None:
+        self.get_calls += 1
         return self.response
 
 
