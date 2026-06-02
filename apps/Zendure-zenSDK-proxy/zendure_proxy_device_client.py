@@ -208,6 +208,10 @@ class DeviceClient:
         """Close the POST HTTP session so the next POST creates a fresh socket."""
         await self._close_session(self._session_key("POST"))
 
+    async def close_get_connection(self) -> None:
+        """Close the GET HTTP session so sleeping devices keep no open socket."""
+        await self._close_session(self._session_key("GET"))
+
     async def close_idle_connections(self, current_ts: float | None = None) -> None:
         """Close HTTP sessions that have been idle longer than the configured limit."""
         if self._idle_connection_close_seconds <= 0:
