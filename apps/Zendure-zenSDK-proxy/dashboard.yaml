@@ -3,62 +3,23 @@ views:
     sections:
       - type: grid
         cards:
-          - type: heading
-            heading: New section
           - chart_type: line
             period: 5minute
             type: statistics-graph
-            entities: &ref_0
+            entities:
               - sensor.vermogensopdracht_zendure_1
               - sensor.zendure_1_vermogen_aansturing
               - sensor.vermogensopdracht_zendure_2
               - sensor.zendure_2_vermogen_aansturing
               - sensor.vermogensopdracht_zendure_3
               - sensor.zendure_3_vermogen_aansturing
-            stat_types: &ref_1
+            stat_types:
               - mean
-            days_to_show: 0.05
+            days_to_show: 0.1
             energy_date_selection: false
             expand_legend: false
             logarithmic_scale: false
             title: Aansturing en realisatie zendures
-          - chart_type: line
-            period: 5minute
-            type: statistics-graph
-            entities: *ref_0
-            stat_types: *ref_1
-            days_to_show: 1
-            energy_date_selection: false
-            expand_legend: false
-            logarithmic_scale: false
-          - chart_type: line
-            period: 5minute
-            type: statistics-graph
-            entities:
-              - sensor.zendure_1_laadpercentage
-              - sensor.zendure_2_laadpercentage
-              - sensor.zendure_3_laadpercentage
-            stat_types:
-              - mean
-            days_to_show: 1
-          - chart_type: line
-            period: hour
-            type: statistics-graph
-            entities:
-              - sensor.zendure_2400_ac_batterij_1_temperatuur
-              - sensor.zendure_2400_ac_batterij_2_temperatuur
-              - sensor.zendure_2400_ac_batterij_3_temperatuur
-            stat_types:
-              - mean
-            days_to_show: 1
-          - type: markdown
-            content: >-
-              [Proxy
-              metrics](http://192.168.0.111:5050/app/zendure_proxy_metrics)
-
-              [Proxy logs](http://192.168.0.111:5050/app/zendure_proxy_logs)
-      - type: grid
-        cards:
           - type: heading
             heading: New section
           - type: entities
