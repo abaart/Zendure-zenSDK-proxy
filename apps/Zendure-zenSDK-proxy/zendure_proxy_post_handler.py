@@ -240,10 +240,15 @@ async def execute_post(
     if (
         state.device_active_count > 1
         and previous_active_count == 1
+        and not force_all
+        and not soc_boundary_active
         and prev_active_device in eligible_set
         and state.single_to_dual_transition_start_ts <= 0
         and state.forced_dual_transition_start_ts <= 0
         and any(devs[idx].latest_power_cmd != 0 for idx in eligible)
+        and _transition_first_phase_fits_device_capacity(
+            state, ac_mode, distribution_power, max_power, prev_active_device
+        )
     ):
         state.single_to_dual_transition_start_ts = now_ts
         state.single_to_dual_transition_original_device = prev_active_device
@@ -251,9 +256,14 @@ async def execute_post(
     if (
         state.device_active_count == 1
         and state.single_mode_active_device != prev_active_device
+        and not force_all
+        and not soc_boundary_active
         and not soc_boundary_reduced_active_count
         and prev_active_device in eligible_set
         and previous_active_count == 1
+        and _transition_first_phase_fits_device_capacity(
+            state, ac_mode, distribution_power, max_power, prev_active_device
+        )
         and not (
             (ac_mode == 1 and any(devs[idx].soc_limit == 1 for idx in eligible))
             or (ac_mode == 2 and any(devs[idx].soc_limit == 2 for idx in eligible))
@@ -272,10 +282,8 @@ async def execute_post(
     if invalid_direction:
         per_device = [0] * n
     else:
-        if soc_boundary_active:
-            state.transition_start_ts = 0.0
-            state.single_to_dual_transition_start_ts = 0.0
-            state.forced_dual_transition_start_ts = 0.0
+        if soc_boundary_active or force_all:
+            _clear_transition_timers(state)
         per_device = _calc_per_device_power(
             state, ac_mode, distribution_power, max_power, cfg,
             soc_boundary_active=soc_boundary_active,
@@ -284,10 +292,25 @@ async def execute_post(
                 soc_boundary_shortfall_compensation
             ),
         )
-        if not soc_boundary_active:
+        if (
+            not soc_boundary_active
+            and not force_all
+            and _transition_first_phase_fits_device_capacity(
+                state,
+                ac_mode,
+                sum(per_device),
+                max_power,
+                _transition_original_device(state),
+            )
+        ):
             per_device = apply_transition(
                 per_device, state, now_ts, cfg.transition_timer
             )
+        elif _transition_active(state):
+            _clear_transition_timers(state)
+        per_device = _enforce_device_command_capacities(
+            per_device, state, ac_mode, max_power
+        )
 
     outbound_props = dict(props)
     _apply_aggregate_limit_props(outbound_props, state, devs, eligible)
@@ -496,7 +519,7 @@ def _soc_boundary_command_indices(
         lowest = min(levels)
         min_soc_pct = effective_min_soc_pct(state)
         soc_diff = max(levels) - lowest
-        if lowest < min_soc_pct and soc_diff >= max(0, low_soc_diff_threshold):
+        if lowest <= min_soc_pct and soc_diff >= max(0, low_soc_diff_threshold):
             return [
                 idx for idx in eligible
                 if devs[idx].electric_level == lowest
@@ -511,7 +534,7 @@ def _soc_boundary_command_indices(
     elif ac_mode == 2:
         lowest = min(levels)
         min_soc_pct = effective_min_soc_pct(state)
-        if lowest < min_soc_pct:
+        if lowest <= min_soc_pct:
             hold_idx = [
                 idx for idx in eligible
                 if devs[idx].electric_level == lowest
@@ -577,6 +600,110 @@ def _measured_power_capacity(
     if measured < abs(previous_command):
         return measured
     return fallback
+
+
+def _device_command_capacity(
+    state: ProxyState,
+    ac_mode: int,
+    idx: int,
+    fallback_max_power: int,
+) -> int:
+    fallback = max(0, _int(fallback_max_power))
+    if idx < 0 or idx >= len(state.devices):
+        return 0
+    dev = state.devices[idx]
+    if ac_mode == 1:
+        device_limit = getattr(dev, "charge_max_limit", 0)
+        state_limit = getattr(state, "max_power_in", 0)
+    elif ac_mode == 2:
+        device_limit = getattr(dev, "inverse_max_power", 0)
+        state_limit = getattr(state, "max_power_out", 0)
+    else:
+        return 0
+    return max(0, _int(device_limit) or fallback or _int(state_limit) or 800)
+
+
+def _transition_active(state: ProxyState) -> bool:
+    return (
+        getattr(state, "forced_dual_transition_start_ts", 0.0) > 0
+        or getattr(state, "single_to_dual_transition_start_ts", 0.0) > 0
+        or getattr(state, "transition_start_ts", 0.0) > 0
+    )
+
+
+def _transition_original_device(state: ProxyState) -> int:
+    if getattr(state, "forced_dual_transition_start_ts", 0.0) > 0:
+        return getattr(state, "forced_dual_transition_original_device", 0)
+    if getattr(state, "single_to_dual_transition_start_ts", 0.0) > 0:
+        return getattr(state, "single_to_dual_transition_original_device", 0)
+    return getattr(state, "transition_original_device", 0)
+
+
+def _clear_transition_timers(state: ProxyState) -> None:
+    state.transition_start_ts = 0.0
+    state.single_to_dual_transition_start_ts = 0.0
+    state.forced_dual_transition_start_ts = 0.0
+
+
+def _transition_first_phase_fits_device_capacity(
+    state: ProxyState,
+    ac_mode: int,
+    total_power: int,
+    fallback_max_power: int,
+    original_idx: int,
+) -> bool:
+    if not _transition_active(state) and total_power <= 0:
+        return True
+    capacity = _device_command_capacity(
+        state, ac_mode, original_idx, fallback_max_power
+    )
+    first_phase_power = round(max(0, total_power) * 0.95)
+    return first_phase_power <= capacity
+
+
+def _enforce_device_command_capacities(
+    per_device: list[int],
+    state: ProxyState,
+    ac_mode: int,
+    fallback_max_power: int,
+) -> list[int]:
+    result = list(per_device)
+    if not result:
+        return result
+
+    capacities = [
+        _device_command_capacity(state, ac_mode, idx, fallback_max_power)
+        for idx in range(len(result))
+    ]
+    surplus = 0
+    for idx, power in enumerate(result):
+        capped = min(max(0, _int(power)), capacities[idx])
+        surplus += max(0, _int(power) - capped)
+        result[idx] = capped
+
+    if surplus <= 0:
+        return result
+
+    active_idx = [
+        idx for idx in state.devices_active_idx
+        if 0 <= idx < len(result) and result[idx] < capacities[idx]
+    ]
+    if not active_idx:
+        active_idx = [
+            idx for idx, capacity in enumerate(capacities)
+            if result[idx] > 0 and result[idx] < capacity
+        ]
+    if not active_idx:
+        return result
+
+    weights = _soc_boundary_weights(state, ac_mode, active_idx)
+    spare_capacities = [capacities[idx] - result[idx] for idx in active_idx]
+    additions = _weighted_capped_int_distribution(
+        surplus, weights, spare_capacities
+    )
+    for idx, addition in zip(active_idx, additions):
+        result[idx] += addition
+    return result
 
 
 def _same_direction_power_command(power: int, ac_mode: int) -> bool:
@@ -887,7 +1014,7 @@ def _low_soc_charge_priority_indices(
     min_soc_pct = effective_min_soc_pct(state)
     levels = [devs[idx].electric_level for idx in valid]
     lowest = min(levels)
-    if lowest >= min_soc_pct:
+    if lowest > min_soc_pct:
         return set(valid)
 
     soc_diff = max(levels) - lowest
@@ -1115,7 +1242,7 @@ def _select_active_devices(
     low_soc_charge_tie_break = (
         ac_mode == 1
         and len(eligible) > 1
-        and any(devs[i].electric_level < min_soc_pct for i in eligible)
+        and any(devs[i].electric_level <= min_soc_pct for i in eligible)
     )
     if low_soc_charge_tie_break:
         ranked = sorted(
@@ -1259,7 +1386,10 @@ def _distribute_soc_boundary_power(
     if not active_idx or total_power <= 0:
         return [0] * len(active_idx)
 
-    command_capacities = [max(0, _int(max_power))] * len(active_idx)
+    command_capacities = [
+        _device_command_capacity(state, ac_mode, idx, max_power)
+        for idx in active_idx
+    ]
     minimums = [
         min(_soc_boundary_min_device_power(cfg), capacity)
         for capacity in command_capacities

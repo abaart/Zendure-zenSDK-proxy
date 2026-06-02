@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zendure_proxy_state import ProxyState
 
-PROXY_VERSION = "v0.1.25"
+PROXY_VERSION = "v0.1.26"
 SOC_LOCKSTEP_LOW_THRESHOLD = 10.0
 SOC_LOCKSTEP_HIGH_THRESHOLD = 90.0
 
@@ -115,7 +115,7 @@ def soc_boundary_lockstep_active(
         if idx < 0 or idx >= len(state.devices):
             continue
         level = state.devices[idx].electric_level
-        if level < min_soc_pct or level > SOC_LOCKSTEP_HIGH_THRESHOLD:
+        if level <= min_soc_pct or level > SOC_LOCKSTEP_HIGH_THRESHOLD:
             return True
     return False
 

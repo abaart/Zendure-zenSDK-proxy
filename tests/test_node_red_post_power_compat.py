@@ -804,6 +804,115 @@ def test_low_soc_charge_uses_ten_percent_floor_when_device_min_soc_is_lower() ->
     assert state.relay_saver_until_ts_by_idx == {}
 
 
+def test_low_soc_charge_keeps_exact_ten_percent_devices_priority() -> None:
+    state = _state(3)
+    state.min_soc = 100
+    state.max_power_in = 2000
+    state.ac_mode = 1
+    for device in state.devices:
+        device.charge_max_limit = 2000
+    state.devices[0].electric_level = 16
+    state.devices[1].electric_level = 10
+    state.devices[2].electric_level = 10
+    state.devices[0].latest_power_cmd = 1000
+    state.single_mode_active_device = 0
+    state.devices_active_idx = [0]
+    state.device_active_count = 1
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 2000}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 2
+    assert state.devices_active_idx == [1, 2]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        0,
+        1000,
+        1000,
+    ]
+    assert [device.latest_power_cmd for device in state.devices] == [0, 1000, 1000]
+    assert state.single_to_dual_transition_start_ts == 0.0
+    assert state.transition_start_ts == 0.0
+
+
+def test_always_dual_mode_does_not_start_single_to_dual_transition() -> None:
+    state = _state(3)
+    state.min_soc = 100
+    state.max_power_in = 2000
+    state.ac_mode = 1
+    for device in state.devices:
+        device.charge_max_limit = 2000
+    state.devices[0].electric_level = 17
+    state.devices[1].electric_level = 11
+    state.devices[2].electric_level = 11
+    state.devices[0].latest_power_cmd = 1000
+    state.single_mode_active_device = 0
+    state.devices_active_idx = [0]
+    state.device_active_count = 1
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 2000}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"], always_dual_mode=True),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    assert state.device_active_count == 3
+    assert state.devices_active_idx == [0, 1, 2]
+    assert [client.post_payloads[0]["properties"]["inputLimit"] for client in clients] == [
+        521,
+        739,
+        739,
+    ]
+    assert state.single_to_dual_transition_start_ts == 0.0
+    assert state.transition_start_ts == 0.0
+
+
+def test_single_to_dual_transition_does_not_exceed_device_charge_limit() -> None:
+    state = _state(3)
+    state.min_soc = 100
+    state.max_power_in = 1000
+    state.ac_mode = 1
+    for device in state.devices:
+        device.charge_max_limit = 1000
+        device.electric_level = 50
+    state.devices[0].latest_power_cmd = 1000
+    state.single_mode_active_device = 0
+    state.devices_active_idx = [0]
+    state.device_active_count = 1
+    clients = [FakeDeviceClient(), FakeDeviceClient(), FakeDeviceClient()]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 2000}},
+            clients,
+            state,
+            Config(device_ips=["ip1", "ip2", "ip3"]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    payloads = [
+        client.post_payloads[0]["properties"]["inputLimit"]
+        for client in clients
+    ]
+    assert max(payloads) <= 1000
+    assert payloads == [1000, 1000, 0]
+    assert state.single_to_dual_transition_start_ts == 0.0
+    assert state.transition_start_ts == 0.0
+
+
 def test_relay_saver_is_disabled_while_device_is_above_high_soc_boundary() -> None:
     state = _state(3)
     state.ac_mode = 1
