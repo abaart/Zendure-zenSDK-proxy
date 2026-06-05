@@ -295,9 +295,10 @@ zendure_proxy:
 Do not put `zendure_proxy:` below another AppDaemon app such as
 `dynamisch_handelen:`.
 
-For a first test, most users only need to set `devices:`, `server_host`, and
-`server_port`. The full example below follows
-[`examples/apps.yaml`](examples/apps.yaml).
+For a first test, most users only need to set `devices:`. Keep
+`server_host: "0.0.0.0"` and `server_port: 8120` unless you run AppDaemon
+outside the Home Assistant add-on or already use port `8120` for another app.
+The full example below follows [`examples/apps.yaml`](examples/apps.yaml).
 
 ```yaml
 zendure_proxy:
