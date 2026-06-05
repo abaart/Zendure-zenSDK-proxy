@@ -1,5 +1,7 @@
 # Zendure zenSDK Proxy
 
+![Zendure zenSDK Proxy illustration](images/illustation.png)
+
 > A resilient AppDaemon bridge between Home Assistant and Zendure devices.
 >
 > In concrete terms, `ZendureProxy` exposes Zendure report and write endpoints,
