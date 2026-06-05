@@ -187,7 +187,8 @@ close as possible to 1600 W.
 
 HACS installs the AppDaemon code from `apps/Zendure-zenSDK-proxy/`. HACS does
 not create an AppDaemon installation, and HACS does not edit `apps.yaml`.
-Install AppDaemon first, set `production_mode: true` in the global AppDaemon
+Install AppDaemon first, set `production_mode: true` and
+`app_dir: /homeassistant/appdaemon/apps` in the global AppDaemon
 `appdaemon.yaml`, and then add the configuration from
 [`examples/apps.yaml`](examples/apps.yaml) to the AppDaemon `apps.yaml`.
 
@@ -199,7 +200,9 @@ Install AppDaemon first, set `production_mode: true` in the global AppDaemon
 6. Add this GitHub repository as type `AppDaemon`.
 7. Install `Zendure zenSDK Proxy`.
 8. Open the AppDaemon `appdaemon.yaml`.
-9. Set `production_mode: true` under the existing global `appdaemon:` section.
+9. Set `production_mode: true` and
+   `app_dir: /homeassistant/appdaemon/apps` under the existing global
+   `appdaemon:` section.
 10. Open the AppDaemon `apps.yaml`.
 11. Copy the `zendure_proxy` configuration from
     [`examples/apps.yaml`](examples/apps.yaml) into the AppDaemon `apps.yaml`.
@@ -210,25 +213,65 @@ Install AppDaemon first, set `production_mode: true` in the global AppDaemon
     address: `a0d7b954-appdaemon:8120/endpoint`.
 
 HACS downloads the AppDaemon code to the Home Assistant configuration directory
-under `appdaemon/apps/`.
+under `appdaemon/apps/`. The AppDaemon add-on can use its own add-on
+configuration directory as `app_dir`. Set
+`app_dir: /homeassistant/appdaemon/apps` so AppDaemon reads the same
+`appdaemon/apps/` directory where HACS writes AppDaemon apps.
 
 When AppDaemon runs as a Home Assistant add-on, Home Assistant Core normally
 reaches AppDaemon through the internal add-on hostname `a0d7b954-appdaemon`.
 Use `localhost:8120` only when the caller runs in the same container as
 AppDaemon.
 
-Set AppDaemon `production_mode: true` before using HACS updates:
+Set AppDaemon `production_mode: true` before using HACS updates, and set
+`app_dir: /homeassistant/appdaemon/apps` so AppDaemon reads the HACS AppDaemon
+app directory:
 
 ```yaml
 appdaemon:
   production_mode: true
+  app_dir: /homeassistant/appdaemon/apps
 ```
 
-Put `production_mode: true` in `appdaemon.yaml`, not in `apps.yaml` and not
-under `zendure_proxy:`. With `production_mode: true`, AppDaemon checks Python
-files only on restart. Without `production_mode: true`, AppDaemon can reload
-while HACS has deleted the old Python files and has not written the new Python
-files yet.
+Put `production_mode: true` and `app_dir: /homeassistant/appdaemon/apps` in
+`appdaemon.yaml`, not in `apps.yaml` and not under `zendure_proxy:`. With
+`production_mode: true`, AppDaemon checks Python files only on restart. Without
+`production_mode: true`, AppDaemon can reload while HACS has deleted the old
+Python files and has not written the new Python files yet.
+
+After restart, the AppDaemon log should show:
+
+```text
+Using /homeassistant/appdaemon/apps as app_dir
+```
+
+If the AppDaemon log shows `Using /config/apps as app_dir`, AppDaemon is
+reading the add-on configuration directory instead of the Home Assistant
+configuration directory where HACS installs AppDaemon apps. In that case,
+`zendure_proxy` can fail with:
+
+```text
+ModuleNotFoundError: No module named 'zendure_proxy'
+```
+
+Check where HACS installed the files from the Home Assistant Terminal add-on:
+
+```bash
+find /config/appdaemon/apps -maxdepth 3 -type f \( -name 'apps.yaml' -o -name 'zendure_proxy*.py' \) -print | sort
+```
+
+If the command prints
+`/config/appdaemon/apps/Zendure-zenSDK-proxy/zendure_proxy.py`, HACS installed
+the Python files in the Home Assistant configuration directory. `realpath` can
+show whether `/config/appdaemon/apps` is a symlink or alias to another directory:
+
+```bash
+realpath /config/appdaemon/apps
+```
+
+If the AppDaemon log says `Using /config/apps as app_dir` while HACS installed
+`zendure_proxy.py` under `/config/appdaemon/apps`, change AppDaemon
+`app_dir` to `/homeassistant/appdaemon/apps`.
 
 After a HACS update of `Zendure zenSDK Proxy`, restart AppDaemon manually. HACS
 replaces the Python files, but HACS does not restart the AppDaemon add-on.

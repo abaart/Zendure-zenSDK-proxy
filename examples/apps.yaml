@@ -1,13 +1,16 @@
 ## AppDaemon global config reminder:
-## Put this setting in AppDaemon appdaemon.yaml, under the global appdaemon:
-## section. Do not put production_mode under zendure_proxy in apps.yaml.
+## Put these settings in AppDaemon appdaemon.yaml, under the global appdaemon:
+## section. Do not put production_mode or app_dir under zendure_proxy in apps.yaml.
 ##
 ## appdaemon:
 ##   production_mode: true
+##   app_dir: /homeassistant/appdaemon/apps
 ##
 ## With production_mode: true, AppDaemon checks Python app files only on
 ## restart. This avoids AppDaemon reloading zendure_proxy while HACS is between
 ## deleting the old release files and writing the new release files.
+## With app_dir: /homeassistant/appdaemon/apps, AppDaemon reads the same
+## appdaemon/apps directory where HACS installs AppDaemon apps.
 
 zendure_proxy:
   module: zendure_proxy
