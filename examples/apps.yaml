@@ -127,7 +127,9 @@ zendure_proxy:
   always_dual_mode: false
   equal_mode: false
 
-  # Reserve mode for short zero-on-the-meter charge/discharge oscillation.
+  # Experimental reserve mode for short zero-on-the-meter charge/discharge
+  # oscillation. Default is false. Enable only after testing the normal proxy
+  # behavior first.
   # Reserve mode is the power anti-pingpong mode. The proxy keeps one or more
   # Zendures ready in the opposite direction with a small reserve power. Reserve mode can
   # reduce relay switches and react faster to short import peaks, but reserve
@@ -163,10 +165,11 @@ zendure_proxy:
   anti_pingpong_energy_price_per_kwh: 0.30
   anti_pingpong_smart_disable_bad_minutes: 2
 
-  # Relay saver mode for large drops to zero power.
-  # When enabled, a Zendure that would drop from a high measured command to
-  # 0 W keeps the previous direction at relay_saver_min_power_watts for
-  # relay_saver_hold_seconds. Reserve mode payloads still have priority.
+  # Experimental relay saver mode for large drops to zero power. Default is
+  # false. When enabled, a Zendure that would drop from a high measured command
+  # to 0 W keeps the previous direction at relay_saver_min_power_watts for
+  # relay_saver_hold_seconds. Enable only after testing the normal proxy
+  # behavior first. Reserve mode payloads still have priority.
   relay_saver_enable: false
   relay_saver_min_drop_watts: 900
   relay_saver_min_power_watts: 40

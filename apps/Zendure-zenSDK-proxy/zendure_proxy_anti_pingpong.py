@@ -35,6 +35,8 @@ def minimum_control_power_watts(
 ) -> int:
     configured = max(0, _int(configured_power))
     hardware_max = _control_hardware_max(state, ac_mode, device_idx)
+    # Zendure control below 40 W is unreliable on 800 W hardware. 1200 W
+    # hardware needs 80 W. README.md links the Tweakers measurements.
     hardware_floor = 80 if hardware_max > 800 else 40
     return max(configured, hardware_floor)
 

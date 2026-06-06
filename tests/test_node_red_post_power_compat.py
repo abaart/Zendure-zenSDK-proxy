@@ -175,6 +175,60 @@ def test_equal_mode_respects_mixed_hardware_and_yaml_charge_caps() -> None:
     ]
 
 
+def test_equal_mode_posts_to_all_ten_devices() -> None:
+    state = _state(10)
+    state.equal_mode = True
+    clients = [FakeDeviceClient() for _idx in range(10)]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 5000}},
+            clients,
+            state,
+            Config(
+                device_ips=[f"ip{idx}" for idx in range(1, 11)],
+                equal_mode=True,
+            ),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    per_device = [
+        client.post_payloads[0]["properties"]["inputLimit"]
+        for client in clients
+    ]
+    assert per_device == [500] * 10
+    assert sum(per_device) == 5000
+    assert state.devices_active_idx == list(range(10))
+
+
+def test_weighted_charge_distribution_handles_ten_devices() -> None:
+    state = _state(10)
+    state.devices_active_idx = list(range(10))
+    state.device_active_count = 10
+    for idx, soc in enumerate([15, 20, 25, 35, 45, 55, 65, 75, 85, 95]):
+        state.devices[idx].electric_level = soc
+    clients = [FakeDeviceClient() for _idx in range(10)]
+
+    asyncio.run(
+        execute_post(
+            {"properties": {"acMode": 1, "inputLimit": 3200}},
+            clients,
+            state,
+            Config(device_ips=[f"ip{idx}" for idx in range(1, 11)]),
+            lambda *args, **kwargs: None,
+        )
+    )
+
+    per_device = [
+        client.post_payloads[0]["properties"]["inputLimit"]
+        for client in clients
+    ]
+    assert per_device == [561, 529, 496, 431, 366, 301, 237, 172, 107, 0]
+    assert sum(per_device) == 3200
+    assert state.devices_active_idx == list(range(9))
+
+
 def test_invalid_direction_command_does_not_change_active_device() -> None:
     state = _state(2)
     state.ac_mode = 2
@@ -673,8 +727,8 @@ def test_anti_pingpong_uses_multiple_reserve_devices_with_five_devices() -> None
 
     assert state.anti_pingpong_reserve_idx == [4, 3]
     assert state.anti_pingpong_service_idx == [0, 1]
-    assert clients[3].post_payloads[0]["properties"]["outputLimit"] == 30
-    assert clients[4].post_payloads[0]["properties"]["outputLimit"] == 30
+    assert clients[3].post_payloads[0]["properties"]["outputLimit"] == 40
+    assert clients[4].post_payloads[0]["properties"]["outputLimit"] == 40
     assert clients[0].post_payloads[0]["properties"]["inputLimit"] > 0
     assert clients[1].post_payloads[0]["properties"]["inputLimit"] > 0
 
