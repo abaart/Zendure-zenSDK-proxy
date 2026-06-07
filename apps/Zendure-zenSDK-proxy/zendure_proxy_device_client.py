@@ -20,6 +20,8 @@ from typing import Callable, Optional
 
 import aiohttp
 
+from zendure_proxy_health import post_failure_response
+
 
 def build_device_url(ip: str, endpoint: str, local_proxy_url: str = "") -> str:
     """Build Zendure device URL, including Node-RED testdevice loopback URLs."""
@@ -33,6 +35,11 @@ def build_device_url(ip: str, endpoint: str, local_proxy_url: str = "") -> str:
             proxy_url = proxy_url[: -len(endpoint_suffix)]
         return f"{proxy_url.rstrip('/')}/{ip}/{endpoint}"
     return f"http://{ip}/{endpoint}"
+
+
+def _exception_message(exc: Exception) -> str:
+    message = str(exc).strip()
+    return message if message else "POST returned no response"
 
 
 @dataclass
@@ -134,7 +141,9 @@ class DeviceClient:
                     if request.method == "GET":
                         request.future.set_result(None)
                     else:
-                        request.future.set_result({"ack": "pong"})
+                        request.future.set_result(post_failure_response(
+                            _exception_message(exc)
+                        ))
                 self._log(
                     f"Device {self.ip} queue worker error: {exc}",
                     level="WARNING",
@@ -190,10 +199,10 @@ class DeviceClient:
                 self._log(
                     f"Device {self.ip} POST HTTP {resp.status}", level="WARNING"
                 )
-                return {"ack": "pong"}
+                return post_failure_response(f"POST HTTP {resp.status}")
         except Exception as exc:
             self._log(f"Device {self.ip} POST error: {exc}", level="WARNING")
-            return {"ack": "pong"}
+            return post_failure_response(_exception_message(exc))
         finally:
             if self._metrics is not None:
                 self._metrics.finish_outgoing(

@@ -8,7 +8,11 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Callable
 
-from zendure_proxy_health import eligible_device_indices
+from zendure_proxy_health import (
+    eligible_device_indices,
+    post_response_failed,
+    record_post_results,
+)
 from zendure_proxy_power import now
 
 if TYPE_CHECKING:
@@ -58,9 +62,12 @@ async def manage_standby(
                 dev.standby_task.cancel()
             dev.standby_task = None
             if dev.smart_mode == 0 and (per_device[i] > 0 or i in protected_set):
-                await clients[i].post(
+                response = await clients[i].post(
                     {"sn": dev.sn, "properties": {"smartMode": 1}}
                 )
+                record_post_results(state, cfg, [(i, response)])
+                if post_response_failed(response):
+                    continue
                 dev.smart_mode = 1
             dev.standby_device = False
         else:
@@ -105,7 +112,7 @@ async def _delayed_standby(
                 return
             if dev.smart_mode == 0:
                 return
-            await clients[idx].post(
+            response = await clients[idx].post(
                 {
                     "sn": dev.sn,
                     "properties": {
@@ -115,6 +122,10 @@ async def _delayed_standby(
                     },
                 }
             )
+            if cfg is not None:
+                record_post_results(state, cfg, [(idx, response)])
+            if post_response_failed(response):
+                return
             close_post_connection = getattr(
                 clients[idx], "close_post_connection", None
             )

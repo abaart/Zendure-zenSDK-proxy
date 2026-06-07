@@ -22,7 +22,11 @@ from zendure_proxy_anti_pingpong import (
 )
 from zendure_proxy_config import Config
 from zendure_proxy_device_client import DeviceClient
-from zendure_proxy_health import eligible_device_indices
+from zendure_proxy_health import (
+    eligible_device_indices,
+    public_post_response,
+    record_post_results,
+)
 from zendure_proxy_power import (
     SOC_LOCKSTEP_HIGH_THRESHOLD,
     apply_transition,
@@ -89,6 +93,7 @@ async def execute_post(
         smart_mode_before = [dev.smart_mode for dev in devs]
 
         responses = []
+        post_results = []
         for i, client in enumerate(clients):
             if i not in eligible_set:
                 continue
@@ -103,9 +108,12 @@ async def execute_post(
                 if devs[i].sn
                 else {"properties": dict(device_outbound_props)}
             )
-            responses.append(await client.post(dp))
+            response = await client.post(dp)
+            post_results.append((i, response))
+            responses.append(public_post_response(response))
             if "smartMode" in device_outbound_props:
                 devs[i].smart_mode = _int(device_outbound_props["smartMode"])
+        record_post_results(state, cfg, post_results)
 
         if _int(outbound_props.get("smartMode", -1), -1) == 1:
             passive = eligible_set - set(state.devices_active_idx)
@@ -400,6 +408,7 @@ async def execute_post(
 
     # ── Send commands to all devices in parallel ───────────────────────────────
     tasks = []
+    task_indices = []
     for i, client in enumerate(clients):
         if i not in eligible_set:
             _record_device_power_command(devs[i], 0, now_ts)
@@ -466,6 +475,7 @@ async def execute_post(
             device_payload["sn"] = devs[i].sn
         if not _suppress_standby_post(devs[i], dp):
             tasks.append(client.post(device_payload))
+            task_indices.append(i)
         _record_device_power_command(devs[i], signed_power, now_ts)
 
     removed_active = set(prev_active_idx) - set(state.devices_active_idx)
@@ -477,7 +487,10 @@ async def execute_post(
         if 0 <= idx < len(devs):
             devs[idx].latest_power_cmd_zero_ts = 0.0
 
-    responses = await asyncio.gather(*tasks) if tasks else []
+    raw_responses = await asyncio.gather(*tasks) if tasks else []
+    post_results = list(zip(task_indices, raw_responses))
+    record_post_results(state, cfg, post_results)
+    responses = [public_post_response(response) for response in raw_responses]
 
     # ── Update aggregate state ─────────────────────────────────────────────────
     state.ac_mode = ac_mode

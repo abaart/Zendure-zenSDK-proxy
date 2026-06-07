@@ -31,6 +31,9 @@ class DeviceState:
     last_successful_get_ts: float = 0.0
     last_failed_get_ts: float = 0.0
     last_get_error: str = ""
+    last_successful_post_ts: float = 0.0
+    last_failed_post_ts: float = 0.0
+    last_post_error: str = ""
     recovery_started_ts: float = 0.0
     excluded_since_ts: float = 0.0
     dead_since_ts: float = 0.0

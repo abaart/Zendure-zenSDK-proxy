@@ -793,6 +793,7 @@ class ZendureProxy(hass.Hass):
             serial = item.get("serialNumber") or f"slot-{slot}"
             ip_address = item.get("ipAddress") or "unknown"
             last_error = item.get("lastGetError") or "unknown"
+            last_post_error = item.get("lastPostError") or "unknown"
             age = item.get("lastSuccessfulGetAgeSeconds")
             if current_state == "Healthy":
                 self._proxy_log(
@@ -810,7 +811,8 @@ class ZendureProxy(hass.Hass):
                 f"slot={slot} serial={serial} ip={ip_address} "
                 f"previous_health_state={previous_state} "
                 f"last_successful_get_age_seconds={age} "
-                f"last_get_error={last_error}",
+                f"last_get_error={last_error} "
+                f"last_post_error={last_post_error}",
                 level=level,
             )
 

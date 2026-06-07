@@ -63,6 +63,25 @@ def _install_fake_aiohttp() -> None:
         async def start(self):
             return None
 
+    class ClientTimeout:
+        def __init__(self, total=None):
+            self.total = total
+
+    class TCPConnector:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class ClientSession:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+            return None
+
     def json_response(data, status=200):
         return Response(data=data, status=status)
 
@@ -73,6 +92,9 @@ def _install_fake_aiohttp() -> None:
     web.TCPSite = TCPSite
     web.json_response = json_response
     aiohttp.web = web
+    aiohttp.ClientTimeout = ClientTimeout
+    aiohttp.TCPConnector = TCPConnector
+    aiohttp.ClientSession = ClientSession
     sys.modules.setdefault("aiohttp", aiohttp)
     sys.modules.setdefault("aiohttp.web", web)
 
@@ -82,12 +104,16 @@ _install_fake_aiohttp()
 
 from zendure_proxy import ZendureProxy  # noqa: E402
 from zendure_proxy_config import Config  # noqa: E402
+from zendure_proxy_device_client import DeviceClient  # noqa: E402
 from zendure_proxy_get_handler import build_combined_response, execute_get  # noqa: E402
 from zendure_proxy_ha_sensors import build_proxy_ha_sensors  # noqa: E402
 from zendure_proxy_health import (  # noqa: E402
     degraded_power_by_index,
     eligible_device_indices,
     health_summary,
+    post_failure_response,
+    post_response_error,
+    post_response_failed,
     record_get_results,
     response_with_proxy_health,
 )
@@ -867,6 +893,80 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proxy._state.last_get_response["properties"]["sn_1"], "SN1")
 
 
+class DeviceClientPostFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_post_http_error_codes_return_failure_marker(self) -> None:
+        scenarios = [
+            ("invalid payload", 400, "POST HTTP 400"),
+            ("not found", 404, "POST HTTP 404"),
+            ("server error", 500, "POST HTTP 500"),
+            ("bad gateway", 502, "POST HTTP 502"),
+        ]
+
+        for label, status, expected_error in scenarios:
+            with self.subTest(label=label):
+                logs: list[tuple[str, str]] = []
+                client = DeviceClient(
+                    "192.168.99.15",
+                    lambda msg, level="INFO": logs.append((msg, level)),
+                    idle_connection_close_seconds=0,
+                )
+                client._sessions["POST"] = _FakeAiohttpSession(status=status)
+
+                response = await client._execute_post({"properties": {"bad": "payload"}})
+
+                self.assertTrue(post_response_failed(response))
+                self.assertEqual(post_response_error(response), expected_error)
+                self.assertEqual(response["ack"], "pong")
+                self.assertIn(
+                    (f"Device 192.168.99.15 POST HTTP {status}", "WARNING"),
+                    logs,
+                )
+                await client.close()
+
+    async def test_post_tcp_errors_return_failure_marker(self) -> None:
+        scenarios = [
+            (
+                "econnreset",
+                ConnectionResetError(104, "Connection reset by peer"),
+                "[Errno 104] Connection reset by peer",
+            ),
+            (
+                "connection refused",
+                OSError(111, "Connection refused"),
+                "[Errno 111] Connection refused",
+            ),
+            (
+                "network unreachable",
+                OSError(101, "Network is unreachable"),
+                "[Errno 101] Network is unreachable",
+            ),
+            (
+                "timeout",
+                TimeoutError(),
+                "POST returned no response",
+            ),
+        ]
+
+        for label, exc, expected_error in scenarios:
+            with self.subTest(label=label):
+                logs: list[tuple[str, str]] = []
+                client = DeviceClient(
+                    "192.168.99.15",
+                    lambda msg, level="INFO": logs.append((msg, level)),
+                    idle_connection_close_seconds=0,
+                )
+                client._sessions["POST"] = _FakeAiohttpSession(exception=exc)
+
+                response = await client._execute_post({"properties": {"inputLimit": 800}})
+
+                self.assertTrue(post_response_failed(response))
+                self.assertEqual(post_response_error(response), expected_error)
+                self.assertEqual(response["ack"], "pong")
+                self.assertEqual(logs[0][1], "WARNING")
+                self.assertIn("Device 192.168.99.15 POST error:", logs[0][0])
+                await client.close()
+
+
 class ProxySensorCompatibilityTests(unittest.TestCase):
     def test_get_cache_config_defaults_and_overrides_are_loaded(self) -> None:
         default_cfg = Config(device_ips=[])
@@ -1088,6 +1188,131 @@ class ProxySensorCompatibilityTests(unittest.TestCase):
                 {"inputLimit": 0, "outputLimit": 0},
             ],
         )
+
+    def test_failed_power_post_marks_device_degraded_and_skips_next_post(self) -> None:
+        state = ProxyState(
+            device_count=2,
+            devices=[
+                DeviceState(ip="ip1", sn="SN1", electric_level=80, smart_mode=1),
+                DeviceState(ip="ip2", sn="SN2", electric_level=80, smart_mode=1),
+            ],
+            max_power_in=800,
+            ac_mode=1,
+        )
+        clients = [
+            _FakeClient(post_response=post_failure_response(
+                "POST connection reset by peer"
+            )),
+            _FakeClient(),
+        ]
+        cfg = Config(
+            device_ips=["ip1", "ip2"],
+            standby_charging=False,
+            standby_discharging=False,
+        )
+
+        response = asyncio.run(
+            execute_post(
+                {"properties": {"inputLimit": 1600}},
+                clients,
+                state,
+                cfg,
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        summary = health_summary(state, cfg)
+        self.assertEqual(summary["degradedCount"], 1)
+        self.assertEqual(summary["degradedDevices"][0]["slot"], 1)
+        self.assertEqual(
+            summary["degradedDevices"][0]["lastPostError"],
+            "POST connection reset by peer",
+        )
+        self.assertEqual(len(clients[0].posts), 1)
+        self.assertEqual(len(clients[1].posts), 1)
+        self.assertNotIn("_zendureProxyPostFailed", response[0])
+        self.assertNotIn("_zendureProxyPostError", response[0])
+
+        asyncio.run(
+            execute_post(
+                {"properties": {"inputLimit": 800}},
+                clients,
+                state,
+                cfg,
+                lambda *args, **kwargs: None,
+            )
+        )
+
+        self.assertEqual(len(clients[0].posts), 1)
+        self.assertEqual(len(clients[1].posts), 2)
+
+    def test_failed_post_scenarios_mark_device_degraded_and_skip_next_post(self) -> None:
+        scenarios = [
+            ("invalid payload", "POST HTTP 400"),
+            ("http server error", "POST HTTP 500"),
+            ("econnreset", "[Errno 104] Connection reset by peer"),
+            ("connection refused", "[Errno 111] Connection refused"),
+            ("network unreachable", "[Errno 101] Network is unreachable"),
+            ("timeout without message", "POST returned no response"),
+        ]
+
+        for label, expected_error in scenarios:
+            with self.subTest(label=label):
+                state = ProxyState(
+                    device_count=2,
+                    devices=[
+                        DeviceState(
+                            ip="ip1", sn="SN1", electric_level=80, smart_mode=1
+                        ),
+                        DeviceState(
+                            ip="ip2", sn="SN2", electric_level=80, smart_mode=1
+                        ),
+                    ],
+                    max_power_in=800,
+                    ac_mode=1,
+                )
+                clients = [
+                    _FakeClient(post_response=post_failure_response(expected_error)),
+                    _FakeClient(),
+                ]
+                cfg = Config(
+                    device_ips=["ip1", "ip2"],
+                    standby_charging=False,
+                    standby_discharging=False,
+                )
+
+                response = asyncio.run(
+                    execute_post(
+                        {"properties": {"inputLimit": 1600}},
+                        clients,
+                        state,
+                        cfg,
+                        lambda *args, **kwargs: None,
+                    )
+                )
+
+                summary = health_summary(state, cfg)
+                self.assertEqual(summary["degradedCount"], 1)
+                self.assertEqual(summary["degradedDevices"][0]["slot"], 1)
+                self.assertEqual(
+                    summary["degradedDevices"][0]["lastPostError"],
+                    expected_error,
+                )
+                self.assertNotIn("_zendureProxyPostFailed", response[0])
+                self.assertNotIn("_zendureProxyPostError", response[0])
+
+                asyncio.run(
+                    execute_post(
+                        {"properties": {"inputLimit": 800}},
+                        clients,
+                        state,
+                        cfg,
+                        lambda *args, **kwargs: None,
+                    )
+                )
+
+                self.assertEqual(len(clients[0].posts), 1)
+                self.assertEqual(len(clients[1].posts), 2)
 
     def test_mqtt_discovery_keeps_unique_id_and_default_entity_id(self) -> None:
         config = mqtt_sensor_config(
@@ -1698,12 +1923,68 @@ def _combined_three_device_response() -> dict:
 
 
 class _FakeClient:
-    def __init__(self):
+    def __init__(self, post_response: dict | None = None):
         self.posts = []
+        self._post_response = post_response
 
     async def post(self, payload: dict) -> dict:
         self.posts.append(payload)
-        return {"ack": "pong"}
+        return self._post_response or {"ack": "pong"}
+
+
+class _FakeAiohttpResponse:
+    def __init__(self, status: int, data: dict | None = None):
+        self.status = status
+        self._data = data or {"ack": "pong"}
+
+    async def json(self, content_type=None):
+        return self._data
+
+
+class _FakeAiohttpPostContext:
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        data: dict | None = None,
+        exception: Exception | None = None,
+    ):
+        self._response = _FakeAiohttpResponse(status, data)
+        self._exception = exception
+
+    async def __aenter__(self):
+        if self._exception is not None:
+            raise self._exception
+        return self._response
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeAiohttpSession:
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        data: dict | None = None,
+        exception: Exception | None = None,
+    ):
+        self._status = status
+        self._data = data
+        self._exception = exception
+        self.posts: list[tuple[str, dict]] = []
+        self.closed = False
+
+    def post(self, url: str, json: dict):
+        self.posts.append((url, json))
+        return _FakeAiohttpPostContext(
+            status=self._status,
+            data=self._data,
+            exception=self._exception,
+        )
+
+    async def close(self):
+        self.closed = True
 
 
 class _DelayedGetClient:

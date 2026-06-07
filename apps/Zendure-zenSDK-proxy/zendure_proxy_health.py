@@ -27,6 +27,39 @@ DYNAMIC_SLOT_KEYS = (
     "gridOffMode",
 )
 
+POST_FAILED_KEY = "_zendureProxyPostFailed"
+POST_ERROR_KEY = "_zendureProxyPostError"
+
+
+def post_failure_response(error: str) -> dict[str, Any]:
+    return {
+        "ack": "pong",
+        POST_FAILED_KEY: True,
+        POST_ERROR_KEY: error or "POST returned no response",
+    }
+
+
+def post_response_failed(response: Any) -> bool:
+    return isinstance(response, dict) and bool(response.get(POST_FAILED_KEY))
+
+
+def post_response_error(response: Any) -> str:
+    if not isinstance(response, dict):
+        return "POST returned no response"
+    value = response.get(POST_ERROR_KEY)
+    return str(value) if value else "POST returned no response"
+
+
+def public_post_response(response: Any) -> Any:
+    if not isinstance(response, dict):
+        return response
+    if not response.get(POST_FAILED_KEY) and POST_ERROR_KEY not in response:
+        return response
+    return {
+        key: value for key, value in response.items()
+        if key not in {POST_FAILED_KEY, POST_ERROR_KEY}
+    }
+
 
 def refresh_device_health(
     state: ProxyState,
@@ -97,6 +130,33 @@ def record_get_results(
             dev.recovery_started_ts = 0.0
             dev.dead_since_ts = 0.0
         dev.latest_get_included = dev.excluded_since_ts <= 0
+    refresh_device_health(state, cfg, current_ts=ts)
+
+
+def record_post_results(
+    state: ProxyState,
+    cfg: Config,
+    indexed_results: list[tuple[int, Any]],
+    *,
+    current_ts: float | None = None,
+) -> None:
+    ts = now() if current_ts is None else current_ts
+    refresh_device_health(state, cfg, current_ts=ts)
+    for idx, result in indexed_results:
+        if idx < 0 or idx >= len(state.devices):
+            continue
+        dev = state.devices[idx]
+        if post_response_failed(result):
+            dev.last_failed_post_ts = ts
+            dev.last_post_error = post_response_error(result)
+            dev.recovery_started_ts = 0.0
+            if dev.excluded_since_ts <= 0:
+                dev.excluded_since_ts = ts
+            dev.latest_get_included = dev.excluded_since_ts <= 0
+            continue
+
+        dev.last_successful_post_ts = ts
+        dev.last_post_error = ""
     refresh_device_health(state, cfg, current_ts=ts)
 
 
@@ -251,6 +311,7 @@ def _device_item(idx: int, dev, cfg: Config, ts: float) -> dict[str, Any]:
         "ipAddress": dev.ip,
         "lastSuccessfulGetAgeSeconds": last_age,
         "lastGetError": dev.last_get_error,
+        "lastPostError": dev.last_post_error,
         "recoverySecondsRemaining": round(recovery_remaining, 3),
         "lastKnownPower": _last_known_power(dev),
         "dead": dev.dead_since_ts > 0,
