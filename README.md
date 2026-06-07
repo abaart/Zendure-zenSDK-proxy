@@ -714,12 +714,15 @@ does not work, the new sensors do not get a `unique_id`, but the sensor values
 still arrive.
 
 To move an existing installation from old REST sensors to automatic MQTT
-discovery sensors, first remove the old REST sensor YAML for the same
-`entity_id` values from Home Assistant. Then remove old REST sensor entity
-registry entries when Home Assistant keeps the old REST entities as
-`unavailable`. Do not use old REST sensors and MQTT discovery sensors for the
-same `entity_id` values at the same time, because Home Assistant then creates
-duplicate names such as `sensor.zendure_2_serienummer_2`.
+discovery sensors, first remove the old REST sensor YAML block for the same
+`entity_id` values from Home Assistant, for example the block between
+`BEGIN - Plaats hier je Node-RED sensoren tussen` and
+`EIND - Plaats hier je Node-RED sensoren tussen` in
+`zendure_gielz1986_nl.yaml` or the English Gielz YAML file. Then remove old
+REST sensor entity registry entries when Home Assistant keeps the old REST
+entities as `unavailable`. Do not use old REST sensors and MQTT discovery
+sensors for the same `entity_id` values at the same time, because Home
+Assistant then creates duplicate names such as `sensor.zendure_2_serienummer_2`.
 
 The metrics code is in `zendure_proxy_metrics.py`. The proxy response sensor
 code is in `zendure_proxy_ha_sensors.py`.
@@ -1229,12 +1232,16 @@ POST /endpoint/properties/write HTTP/1.1" 200
 13. Keep Node-RED installed for a short while, but make sure Gielz no longer
     points to Node-RED. When the AppDaemon proxy works reliably, disable or
     remove the Node-RED flow.
-14. This step is optional. Keep the old REST sensors unless you intentionally
-    want to move to automatic proxy sensors. The old REST sensors still pull
-    values from the Python/AppDaemon proxy with periodic GET requests, and
-    keeping the old REST sensors makes it easier to move back to the Node-RED
-    version later. Keep `proxy_ha_sensors_skip_existing: true` while the old
-    REST sensor YAML exists.
+14. Optional: remove the old REST sensor YAML block between
+    `BEGIN - Plaats hier je Node-RED sensoren tussen` and
+    `EIND - Plaats hier je Node-RED sensoren tussen` in
+    `zendure_gielz1986_nl.yaml`, or the matching block in the English Gielz YAML
+    file, only when you intentionally want to move to automatic proxy sensors.
+    Keep the old REST sensors when you want an easy move back to the Node-RED
+    version. The old REST sensors still pull values from the Python/AppDaemon
+    proxy with periodic GET requests. Keep
+    `proxy_ha_sensors_skip_existing: true` while the old REST sensor YAML
+    exists.
 
 Short version: first make AppDaemon work, then change the Gielz IP address, and
 disable Node-RED only after the AppDaemon log shows `GET ... 200` and
