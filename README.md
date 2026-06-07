@@ -645,10 +645,15 @@ proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
 proxy_ha_sensors_mqtt_retain: true
 ```
 
-The proxy can automatically create the normal proxy sensors in Home Assistant.
-The automatic sensors are the same kind of sensors as the old REST sensors from
-`HA_REST_proxy_sensors_NL` and `HA_REST_proxy_sensors_EN`, but the user does not
-need to paste the old sensor block manually.
+The Python/AppDaemon proxy can push the normal proxy sensors into Home Assistant
+itself. The old Node-RED and Gielz setup used REST sensor YAML to pull the same
+values from the proxy endpoints.
+
+Both methods work. The Python/AppDaemon proxy keeps the REST endpoints
+backwards-compatible, so existing REST sensors from `HA_REST_proxy_sensors_NL`,
+`HA_REST_proxy_sensors_EN`, or a `zendure_gielz1986_nl.yaml` sensor block can
+stay in place. Keeping the old REST sensors also makes it easier to move back
+to the Node-RED version later.
 
 The proxy tries MQTT discovery first. When MQTT discovery works, the sensors get
 a `unique_id`. Home Assistant can then manage the sensors through the UI, for
@@ -697,8 +702,9 @@ sensor.zendure_proxy_versie
 ```
 
 `proxy_ha_sensors_skip_existing: true` means that the proxy leaves an existing
-sensor alone when Home Assistant already has the same `entity_id`. Existing REST
-sensor installations therefore keep working after an update.
+sensor alone when Home Assistant already has the same `entity_id`. Keep this
+default when you keep the old REST sensor YAML. The REST sensors continue to
+pull values from the Python/AppDaemon proxy.
 
 New installations without old REST sensor YAML receive the proxy sensors
 automatically. When MQTT works, the new sensors get a `unique_id`. When MQTT
@@ -1221,9 +1227,12 @@ POST /endpoint/properties/write HTTP/1.1" 200
 13. Keep Node-RED installed for a short while, but make sure Gielz no longer
     points to Node-RED. When the AppDaemon proxy works reliably, disable or
     remove the Node-RED flow.
-14. Optionally remove the old REST sensors only when you intentionally want to
-    move to automatic proxy sensors. Keep the old REST sensors when you want to
-    preserve `unique_id` through YAML or when you do not use MQTT.
+14. This step is optional. Keep the old REST sensors unless you intentionally
+    want to move to automatic proxy sensors. The old REST sensors still pull
+    values from the Python/AppDaemon proxy, and keeping the old REST sensors
+    makes it easier to move back to the Node-RED version later. Keep
+    `proxy_ha_sensors_skip_existing: true` while the old REST sensor YAML
+    exists.
 
 Short version: first make AppDaemon work, then change the Gielz IP address, and
 disable Node-RED only after the AppDaemon log shows `GET ... 200` and
