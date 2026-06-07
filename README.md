@@ -645,9 +645,11 @@ proxy_ha_sensors_mqtt_state_prefix: "zendure_proxy"
 proxy_ha_sensors_mqtt_retain: true
 ```
 
-The Python/AppDaemon proxy can push the normal proxy sensors into Home Assistant
-itself. The old Node-RED and Gielz setup used REST sensor YAML to pull the same
-values from the proxy endpoints.
+The old Node-RED and Gielz setup used REST sensor YAML to pull proxy sensor
+values from the proxy endpoints with repeated GET requests from Home Assistant.
+The Python/AppDaemon proxy can also push the same sensor values into Home
+Assistant itself, so the old REST sensor YAML is no longer required for normal
+proxy sensor values.
 
 Both methods work. The Python/AppDaemon proxy keeps the REST endpoints
 backwards-compatible, so existing REST sensors from `HA_REST_proxy_sensors_NL`,
@@ -1229,10 +1231,10 @@ POST /endpoint/properties/write HTTP/1.1" 200
     remove the Node-RED flow.
 14. This step is optional. Keep the old REST sensors unless you intentionally
     want to move to automatic proxy sensors. The old REST sensors still pull
-    values from the Python/AppDaemon proxy, and keeping the old REST sensors
-    makes it easier to move back to the Node-RED version later. Keep
-    `proxy_ha_sensors_skip_existing: true` while the old REST sensor YAML
-    exists.
+    values from the Python/AppDaemon proxy with periodic GET requests, and
+    keeping the old REST sensors makes it easier to move back to the Node-RED
+    version later. Keep `proxy_ha_sensors_skip_existing: true` while the old
+    REST sensor YAML exists.
 
 Short version: first make AppDaemon work, then change the Gielz IP address, and
 disable Node-RED only after the AppDaemon log shows `GET ... 200` and
