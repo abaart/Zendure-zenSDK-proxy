@@ -1238,8 +1238,9 @@ POST /endpoint/properties/write HTTP/1.1" 200
     `zendure_gielz1986_nl.yaml`, or the matching block in the English Gielz YAML
     file, only when you intentionally want to move to automatic proxy sensors.
     Keep the old REST sensors when you want an easy move back to the Node-RED
-    version. The old REST sensors still pull values from the Python/AppDaemon
-    proxy with periodic GET requests. Keep
+    version. The AppDaemon proxy is backwards-compatible with the Node-RED proxy
+    REST API, so the old REST sensors still pull values from the
+    Python/AppDaemon proxy with periodic GET requests. Keep
     `proxy_ha_sensors_skip_existing: true` while the old REST sensor YAML
     exists.
 
