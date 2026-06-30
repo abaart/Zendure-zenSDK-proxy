@@ -118,6 +118,9 @@ class ZendureProxy(hass.Hass):
         self._write_endpoint_handle = await self.register_endpoint(
             self._api_write, "zendure_proxy_write"
         )
+        self._gielz_endpoint_handle = await self.register_endpoint(
+            self._api_gielz_compat, "zendure_proxy"
+        )
         if self._cfg.log_dashboard_enabled:
             self._logs_route_handle = await self.register_route(
                 self._logs_dashboard, self._cfg.log_dashboard_route
@@ -176,7 +179,8 @@ class ZendureProxy(hass.Hass):
             self._proxy_log(
                 f"Zendure proxy v{PROXY_VERSION} started | "
                 f"port={self._cfg.server_port} | "
-                f"api_endpoints=['zendure_proxy_report', 'zendure_proxy_write'] | "
+                "api_endpoints=['zendure_proxy_report', 'zendure_proxy_write', "
+                "'zendure_proxy'] | "
                 f"log_dashboard=/app/{self._cfg.log_dashboard_route} | "
                 f"metrics_dashboard=/app/{self._cfg.metrics_dashboard_route} | "
                 f"devices={self._cfg.device_ips}"
@@ -206,6 +210,8 @@ class ZendureProxy(hass.Hass):
             await self.deregister_endpoint(self._report_endpoint_handle)
         if getattr(self, "_write_endpoint_handle", None):
             await self.deregister_endpoint(self._write_endpoint_handle)
+        if getattr(self, "_gielz_endpoint_handle", None):
+            await self.deregister_endpoint(self._gielz_endpoint_handle)
         if hasattr(self, "_runner"):
             await self._runner.cleanup()
         if hasattr(self, "_processor_task"):
@@ -960,6 +966,45 @@ class ZendureProxy(hass.Hass):
             return {"error": "Invalid JSON"}, 400
 
         return await self._execute_write_request(json_obj)
+
+    async def _api_gielz_compat(self, json_obj, kwargs) -> tuple[dict, int]:
+        request = kwargs.get("request") if isinstance(kwargs, dict) else None
+        method = str(getattr(request, "method", "")).upper()
+        gielz_path = self._gielz_compat_path(json_obj, request)
+
+        if method == "GET" and gielz_path in (
+            "",
+            "properties/report",
+            "endpoint/properties/report",
+        ):
+            return await self._execute_report_request()
+
+        if method == "POST" and gielz_path in (
+            "",
+            "properties/write",
+            "endpoint/properties/write",
+        ):
+            if not isinstance(json_obj, dict):
+                return {"error": "Invalid JSON"}, 400
+            return await self._execute_write_request(json_obj)
+
+        return {"error": f"Unsupported Zendure API path: {gielz_path}"}, 404
+
+    @staticmethod
+    def _gielz_compat_path(json_obj, request: Any) -> str:
+        raw_path = ""
+        if request is not None:
+            query = getattr(request, "query", {})
+            getter = getattr(query, "get", None)
+            if getter is not None:
+                raw_path = getter("path", "") or getter("zendure_path", "")
+
+        if not raw_path:
+            getter = getattr(json_obj, "get", None)
+            if getter is not None:
+                raw_path = getter("path", "") or getter("zendure_path", "")
+
+        return str(raw_path or "").split("?", 1)[0].strip("/")
 
     def _remember_local_proxy_url(self, request: aiohttp.web.Request) -> None:
         host = request.headers.get("Host") if hasattr(request, "headers") else None

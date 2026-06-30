@@ -34,6 +34,7 @@ small pull requests are welcome.
 - [Move from Node-RED to AppDaemon](#move-from-node-red-to-appdaemon)
 - [HACS release note for maintainers](#hacs-release-note-for-maintainers)
 - [Intentional difference from Node-RED with three or more Zendures](#intentional-difference-from-node-red-with-three-or-more-zendures)
+- [Troubleshooting](#troubleshooting)
 
 ## Credits and upstream
 
@@ -533,6 +534,12 @@ Smoke-test the AppDaemon API report endpoint:
 
 ```bash
 curl -i http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
+```
+
+Smoke-test the AppDaemon API endpoint that accepts Gielz package paths:
+
+```bash
+curl -i 'http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy?path=/properties/report'
 ```
 
 Smoke-test a POST request without asking for real power:
@@ -1285,3 +1292,26 @@ need time to stabilize relays, mode, and power control. Jumping directly from
 the AppDaemon/Python implementation uses the same gentle transition for three
 or more Zendures that Node-RED already uses for two Zendures, even though the
 Node-RED 3-Zendure code skips the transition.
+
+## Troubleshooting
+
+### Gielz cannot reach port 8120
+
+When the Gielz package cannot reach `a0d7b954-appdaemon:8120/endpoint` but
+AppDaemon port `5050` works, set `input_text.zendure_2400_ac_ip_adres` to:
+
+```text
+a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy?path=
+```
+
+The Gielz package appends `/properties/report` and `/properties/write`. With
+the value above, Home Assistant calls these AppDaemon API URLs:
+
+```text
+GET  http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy?path=/properties/report
+POST http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy?path=/properties/write
+```
+
+Use the `5050` value only as a fallback for Gielz. Keep
+`a0d7b954-appdaemon:8120/endpoint` as the preferred value when Home Assistant
+Core can reach port `8120`.

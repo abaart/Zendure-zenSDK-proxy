@@ -693,6 +693,60 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(hasattr(proxy, "_proxy_ha_degraded_slots"))
 
+    async def test_gielz_compat_endpoint_routes_report_path_to_get(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        calls: list[str] = []
+
+        async def execute_report():
+            calls.append("report")
+            return {"ok": "report"}, 200
+
+        proxy._execute_report_request = execute_report
+        request = types.SimpleNamespace(
+            method="GET",
+            query={"path": "/properties/report"},
+        )
+
+        data, status = await proxy._api_gielz_compat({}, {"request": request})
+
+        self.assertEqual((data, status), ({"ok": "report"}, 200))
+        self.assertEqual(calls, ["report"])
+
+    async def test_gielz_compat_endpoint_routes_write_path_to_post(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        calls: list[dict] = []
+
+        async def execute_write(payload):
+            calls.append(payload)
+            return {"ack": "pong"}, 200
+
+        payload = {"sn": "SN1", "properties": {"inputLimit": 1000}}
+        proxy._execute_write_request = execute_write
+        request = types.SimpleNamespace(
+            method="POST",
+            query={"path": "/properties/write"},
+        )
+
+        data, status = await proxy._api_gielz_compat(
+            payload,
+            {"request": request},
+        )
+
+        self.assertEqual((data, status), ({"ack": "pong"}, 200))
+        self.assertEqual(calls, [payload])
+
+    async def test_gielz_compat_endpoint_rejects_unknown_path(self) -> None:
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        request = types.SimpleNamespace(
+            method="GET",
+            query={"path": "/api/v1/data"},
+        )
+
+        data, status = await proxy._api_gielz_compat({}, {"request": request})
+
+        self.assertEqual(status, 404)
+        self.assertEqual(data, {"error": "Unsupported Zendure API path: api/v1/data"})
+
     async def test_report_request_returns_cache_after_ha_get_timeout(self) -> None:
         proxy = ZendureProxy.__new__(ZendureProxy)
         proxy._cfg = Config(

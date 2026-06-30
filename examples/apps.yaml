@@ -47,6 +47,10 @@ zendure_proxy:
   # Custom Home Assistant automations can also use AppDaemon's own HTTP API:
   #   http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_report
   #   http://a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy_write
+  #
+  # If the Gielz package appends /properties/report and /properties/write,
+  # this input_text.zendure_2400_ac_ip_adres value uses AppDaemon port 5050:
+  #   a0d7b954-appdaemon:5050/api/appdaemon/zendure_proxy?path=
   server_port: 8120
   server_host: "0.0.0.0"
 
