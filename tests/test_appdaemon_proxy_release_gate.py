@@ -2354,14 +2354,21 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(proxy.ha_states[entity_id]["attributes"]["proxy_restored_entity"])
                     self.assertNotIn("restored", proxy.ha_states[entity_id]["attributes"])
                     self.assertTrue(proxy.writes[0][1]["replace"])
+                    # Live AppDaemon converts boolean attributes into text.
+                    proxy.ha_states[entity_id]["attributes"]["proxy_restored_entity"] = "true"
+                    proxy.ha_states[entity_id]["attributes"]["zendure_proxy_managed"] = "true"
+                    sensors[entity_id] = (11, {})
+                    with patch("zendure_proxy.now", return_value=101):
+                        await proxy._publish_proxy_ha_sensors({})
+                    self.assertEqual(len(proxy.writes), 2)
                     restarted = self.make_proxy(awaitable=awaitable)
                     restarted._mqtt_api = proxy._mqtt_api
                     restarted.ha_states.update(deepcopy(proxy.ha_states))
-                    sensors[entity_id] = (11, {})
-                    with patch("zendure_proxy.now", return_value=101):
+                    sensors[entity_id] = (12, {})
+                    with patch("zendure_proxy.now", return_value=102):
                         await restarted._publish_proxy_ha_sensors({})
                     self.assertEqual([w[0] for w in restarted.writes], [entity_id])
-                    self.assertEqual(restarted.ha_states[entity_id]["state"], "11")
+                    self.assertEqual(restarted.ha_states[entity_id]["state"], "12")
                     self.assertEqual(restarted.ha_states[active_rest]["state"], "10")
                     self.assertEqual(published, [])
 

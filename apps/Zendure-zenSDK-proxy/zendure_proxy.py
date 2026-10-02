@@ -773,8 +773,8 @@ class ZendureProxy(hass.Hass):
                 # Restored registry placeholders have no active REST provider.
                 # Keep their IDs through set_state instead of creating MQTT _2 IDs.
                 restored_existing = (
-                    existing_attributes.get("restored") is True
-                    or existing_attributes.get("proxy_restored_entity") is True
+                    self._ha_attribute_is_true(existing_attributes.get("restored"))
+                    or self._ha_attribute_is_true(existing_attributes.get("proxy_restored_entity"))
                 )
                 owned = self._entity_is_proxy_managed(entity_id, existing_state)
                 if (
@@ -1012,7 +1012,10 @@ class ZendureProxy(hass.Hass):
         if state is None:
             return False
         attributes = state.get("attributes", {})
-        marker = attributes.get("zendure_proxy_managed")
+        return self._ha_attribute_is_true(attributes.get("zendure_proxy_managed"))
+
+    @staticmethod
+    def _ha_attribute_is_true(marker) -> bool:
         return marker is True or (isinstance(marker, str) and marker.lower() == "true")
 
     @staticmethod
