@@ -1,3 +1,4 @@
+# Copy as zendure_temperature_availability.yaml into the HA packages folder.
 # Requires the seven Gielz temperatures in one REST group at scan_interval: 600.
 # One entity update refreshes the group's shared REST coordinator.
 automation:

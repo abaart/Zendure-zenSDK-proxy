@@ -1,3 +1,4 @@
+# Copy as zendure_recorder_policy.yaml into the Home Assistant packages folder.
 # Merge this package's exclusions with existing Recorder settings.
 # Do not change the global purge_keep_days, commit_interval or database settings.
 recorder:

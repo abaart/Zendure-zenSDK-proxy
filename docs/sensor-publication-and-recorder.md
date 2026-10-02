@@ -72,7 +72,9 @@ their intervals and other sensors. Missing temperature IDs, duplicates, custom
 availability and previously split groups require review rather than overwriting.
 
 Install the prepared Gielz package together with
-`examples/zendure-temperature-availability.yaml` only during an approved rollout.
+`examples/zendure_temperature_availability.yaml` only during an approved rollout.
+Keep the filename with underscores when copying into a `!include_dir_named`
+packages folder: Home Assistant uses the filename as the package ID.
 The package calls `homeassistant.update_entity` for one temperature entity when
 pool or individual device health changes; the shared REST coordinator refreshes
 all seven sensors. The report adds `packDeviceSlots`, parallel to `packData`, and
@@ -93,7 +95,7 @@ Check compatibility before deploying to an older HA installation.
 
 ## Recorder configuration
 
-`examples/zendure-recorder-policy.yaml` has 40 explicit exclusions for the
+`examples/zendure_recorder_policy.yaml` has 40 explicit exclusions for the
 approved three-device installation. The exclusions cover P06, P10, P14, P16,
 P17, P19 and P28-P30. Static identifiers and selected transient diagnostics stay
 available to dashboards and automations but gain no new Recorder history or

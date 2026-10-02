@@ -22,8 +22,13 @@ class HaSensorPolicyConfigTests(unittest.TestCase):
     def package(self, filename):
         return yaml.safe_load((ROOT / "examples" / filename).read_text())
 
+    def test_package_filenames_are_valid_home_assistant_slugs(self):
+        for filename in ["zendure_recorder_policy.yaml", "zendure_temperature_availability.yaml"]:
+            self.assertTrue((ROOT / "examples" / filename).is_file())
+            self.assertRegex(Path(filename).stem, r"^[a-z0-9_]+$")
+
     def test_recorder_excludes_exactly_approved_sources(self):
-        config = self.package("zendure-recorder-policy.yaml")
+        config = self.package("zendure_recorder_policy.yaml")
         actual = config["recorder"]["exclude"]["entities"]
         expected = {
             "sensor.zendure_proxy_versie", "sensor.zendure_proxy_uptime",
@@ -52,7 +57,7 @@ class HaSensorPolicyConfigTests(unittest.TestCase):
         ]) for entity in actual))
 
     def test_p03_seven_day_purge_targets_only_22_source_states(self):
-        automation = self.package("zendure-recorder-policy.yaml")["automation"][0]
+        automation = self.package("zendure_recorder_policy.yaml")["automation"][0]
         self.assertEqual(automation["triggers"], [{"trigger": "time", "at": "04:20:00"}])
         action = automation["actions"][0]
         self.assertEqual(action["action"], "recorder.purge_entities")
@@ -141,7 +146,7 @@ class HaSensorPolicyConfigTests(unittest.TestCase):
                 split_temperature_group(groups)
 
     def test_health_refresh_uses_one_temperature_entity_and_ignores_attribute_updates(self):
-        automation = self.package("zendure-temperature-availability.yaml")["automation"][0]
+        automation = self.package("zendure_temperature_availability.yaml")["automation"][0]
         self.assertEqual(automation["triggers"], [{"trigger": "state", "entity_id": [
             "sensor.proxy_zendure_pool_healthy", "sensor.zendure_1_health",
             "sensor.zendure_2_health", "sensor.zendure_3_health",
