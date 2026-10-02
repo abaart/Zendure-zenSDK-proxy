@@ -769,6 +769,13 @@ class ZendureProxy(hass.Hass):
                         heartbeat_lead_seconds=heartbeat_lead_seconds):
                     continue
                 existing_state = await self._get_entity_state(entity_id)
+                existing_attributes = (existing_state or {}).get("attributes", {})
+                # Restored registry placeholders have no active REST provider.
+                # Keep their IDs through set_state instead of creating MQTT _2 IDs.
+                restored_existing = (
+                    existing_attributes.get("restored") is True
+                    or existing_attributes.get("proxy_restored_entity") is True
+                )
                 owned = self._entity_is_proxy_managed(entity_id, existing_state)
                 if (
                     self._cfg.proxy_ha_sensors_skip_existing
@@ -776,15 +783,17 @@ class ZendureProxy(hass.Hass):
                     and entity_id not in self._proxy_ha_sensor_owned_entities
                     and existing_state is not None
                     and not owned
+                    and not restored_existing
                 ):
                     continue
                 transient_existing_update = (
                     force_existing_entities
                     and existing_state is not None
                     and not owned
+                    and not restored_existing
                 )
                 updated_at = str(int(time.time()))
-                if mqtt_ready and not transient_existing_update:
+                if mqtt_ready and not transient_existing_update and not restored_existing:
                     try:
                         await self._publish_proxy_mqtt_sensor(
                             entity_id, state, attributes, response, updated_at
@@ -808,6 +817,7 @@ class ZendureProxy(hass.Hass):
                         attributes={
                             **attributes,
                             "proxy_updated_at": updated_at,
+                            **({"proxy_restored_entity": True} if restored_existing else {}),
                             **(
                                 {}
                                 if transient_existing_update

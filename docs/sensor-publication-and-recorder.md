@@ -93,6 +93,15 @@ The shared proxy API never freezes temperature fields to enforce HA intervals.
 The REST `availability` option is supported by HA 2026.9.1, the inspected version.
 Check compatibility before deploying to an older HA installation.
 
+## Restored sensor IDs
+
+Home Assistant may restore old REST registry entries as `unavailable` placeholders
+after their YAML definitions are removed. `_publish_proxy_ha_sensors()` publishes
+proxy values into placeholders with `set_state`, retains the original entity IDs,
+and marks `proxy_restored_entity: true` so AppDaemon restarts keep using
+`set_state`. Active REST sensors remain responsible for their existing IDs.
+Registry entries are preserved, avoiding duplicate MQTT entities with `_2` IDs.
+
 ## Recorder configuration
 
 `examples/zendure_recorder_policy.yaml` has 40 explicit exclusions for the

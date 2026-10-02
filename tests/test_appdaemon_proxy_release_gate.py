@@ -2331,6 +2331,40 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(entity_ids), len(set(entity_ids)))
         self.assertIn("sensor.zendure_3_deep_standby", entity_ids)
 
+    async def test_restored_placeholders_keep_ids_with_mqtt_and_after_proxy_restart(self):
+        entity_id = "sensor.zendure_1_laadpercentage"
+        active_rest = "sensor.zendure_2_laadpercentage"
+        for awaitable in (False, True):
+            with self.subTest(awaitable=awaitable):
+                proxy = self.make_proxy(awaitable=awaitable)
+                published = []
+                proxy._mqtt_api = types.SimpleNamespace(
+                    mqtt_publish=lambda *args, **kwargs: published.append(args)
+                )
+                proxy.ha_states[entity_id] = {
+                    "state": "unavailable", "attributes": {"restored": True}
+                }
+                proxy.ha_states[active_rest] = {"state": "10", "attributes": {}}
+                sensors = {entity_id: (10, {}), active_rest: (20, {})}
+                with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors):
+                    with patch("zendure_proxy.now", return_value=100):
+                        await proxy._publish_proxy_ha_sensors({})
+                        await proxy._publish_proxy_ha_sensors({})
+                    self.assertEqual(len(proxy.writes), 1)
+                    self.assertTrue(proxy.ha_states[entity_id]["attributes"]["proxy_restored_entity"])
+                    self.assertNotIn("restored", proxy.ha_states[entity_id]["attributes"])
+                    self.assertTrue(proxy.writes[0][1]["replace"])
+                    restarted = self.make_proxy(awaitable=awaitable)
+                    restarted._mqtt_api = proxy._mqtt_api
+                    restarted.ha_states.update(deepcopy(proxy.ha_states))
+                    sensors[entity_id] = (11, {})
+                    with patch("zendure_proxy.now", return_value=101):
+                        await restarted._publish_proxy_ha_sensors({})
+                    self.assertEqual([w[0] for w in restarted.writes], [entity_id])
+                    self.assertEqual(restarted.ha_states[entity_id]["state"], "11")
+                    self.assertEqual(restarted.ha_states[active_rest]["state"], "10")
+                    self.assertEqual(published, [])
+
     async def test_failed_write_is_retried_and_does_not_advance_publication_clock(self):
         proxy = self.make_proxy()
         entity_id = "sensor.zendure_1_omvormer_temperatuur"
