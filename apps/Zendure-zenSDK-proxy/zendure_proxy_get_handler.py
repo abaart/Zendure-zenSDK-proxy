@@ -202,10 +202,14 @@ def build_combined_response(
         "proxyVersion": PROXY_VERSION,
         "timestamp": epoch(),
         "packData": [],
+        "packDeviceSlots": [],
+        "inverterTemperatureDeviceSlots": [idx + 1 for idx in included],
         "properties": {},
     }
     for idx in included:
-        resp["packData"].extend(sources[idx].get("packData", []))
+        packs = sources[idx].get("packData", [])
+        resp["packData"].extend(packs)
+        resp["packDeviceSlots"].extend([idx + 1] * len(packs))
 
     props = resp["properties"]
     props["ts"] = epoch()

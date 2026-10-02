@@ -139,10 +139,11 @@ In plain English:
   `zendure_request_timeout`, which defaults to 60 seconds, a broken connection,
   an HTTP error, or a response that the proxy cannot process.
 - When a Zendure health state changes,
-  `ZendureProxy._publish_health_transition_sensors(...)` immediately publishes
+  `ZendureProxy._publish_health_transition_sensors(...)` immediately checks
   `sensor.proxy_zendure_pool_healthy`, `sensor.zendure_actief_device`,
   `sensor.vermogensopdracht`, and the `sensor.zendure_N_*` sensors for that
-  slot. The method covers `Healthy` to `Degraded`, `Degraded` to `Dead`,
+  slot. Changed status and availability publish immediately; values that were
+  already unavailable are skipped. The method covers `Healthy` to `Degraded`, `Degraded` to `Dead`,
   `Degraded` to `Healthy`, and `Dead` to `Healthy`. Home Assistant sees the
   visible health status without waiting for the next REST sensor update.
 - `ZendureProxy._publish_health_transition_sensors(...)` logs
@@ -159,10 +160,10 @@ In plain English:
   `run_every(..., "now", 300)`. At AppDaemon startup and every 300 seconds
   afterwards, the proxy gets a new Zendure response with `execute_get(...)` and
   then publishes proxy response sensors with
-  `ZendureProxy._publish_report_sensors(...)`. The periodic refresh forces
-  `sensor.proxy_zendure_pool_healthy`, `sensor.zendure_actief_device`,
-  `sensor.vermogensopdracht`, and the `sensor.zendure_N_*` sensors for every
-  configured slot, even when the health state did not change.
+  `ZendureProxy._publish_report_sensors(...)`. The periodic refresh applies the
+  same per-sensor intervals as incoming reports. A separate 60-second
+  `ZendureProxy._publish_sensor_heartbeats(...)` timer republishes unchanged
+  values before their hour/day deadline using cached data, without a device GET.
 - A `Degraded` Zendure receives no POST commands. `execute_post(...)`
   distributes the full power command from Home Assistant over the healthy
   Zendures. With P1 control, the P1 value from the smart meter already contains
@@ -880,7 +881,21 @@ The metrics dashboard shows:
 - outgoing queue depth per Zendure device.
 
 The proxy also publishes Home Assistant metrics through AppDaemon `set_state()`
-by default. The metrics update every `metrics_ha_sensors_interval` seconds.
+by default. Publication decisions run every
+`min(metrics_ha_sensors_interval, 10)` seconds. Changed queue depths publish at
+most every 10 seconds; changed counters and other metrics at most every 60
+seconds. Unchanged metrics receive an hourly publication heartbeat.
+
+Automatic proxy sensors publish changed power, SoC and operating states
+immediately. Changed temperatures publish every 600 seconds, with immediate
+unavailability and recovery. Unchanged values receive an hourly heartbeat;
+serial numbers, IP addresses and the proxy version receive a daily heartbeat.
+`proxy_updated_at` records publication time; `proxy_last_successful_get_at`
+records actual device measurement time. MQTT discovery has `force_update: false`
+and is sent at startup, on configuration changes and after reconnection.
+See [sensor publication and Recorder](docs/sensor-publication-and-recorder.md)
+for the approved per-sensor rules, the local Gielz preparation tool and the
+Recorder packages. Installing the Python modules does not modify HA YAML.
 
 `ZendureProxy._publish_metrics_sensors()` publishes queue, latency, error, and
 relay metrics. `ZendureProxy._restore_metrics_counters_from_ha()` reads counter

@@ -1,0 +1,18 @@
+# Requires the seven Gielz temperatures in one REST group at scan_interval: 600.
+# One entity update refreshes the group's shared REST coordinator.
+automation:
+  - id: zendure_gielz_temperature_health_refresh
+    alias: Zendure Gielz temperature availability
+    triggers:
+      - trigger: state
+        entity_id:
+          - sensor.proxy_zendure_pool_healthy
+          - sensor.zendure_1_health
+          - sensor.zendure_2_health
+          - sensor.zendure_3_health
+        to: null
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.zendure_2400_ac_omvormer_temperatuur
+    mode: restart

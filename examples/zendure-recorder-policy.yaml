@@ -1,0 +1,80 @@
+# Merge this package's exclusions with existing Recorder settings.
+# Do not change the global purge_keep_days, commit_interval or database settings.
+recorder:
+  exclude:
+    entities:
+      - sensor.zendure_1_serienummer
+      - sensor.zendure_1_ip_adres
+      - sensor.zendure_2_serienummer
+      - sensor.zendure_2_ip_adres
+      - sensor.zendure_3_serienummer
+      - sensor.zendure_3_ip_adres
+      - sensor.zendure_proxy_versie
+      - sensor.anti_pingpong_p1_sensor
+      - sensor.anti_pingpong_p1_sensor_bron
+      - sensor.relay_saver_resterende_seconden
+      - sensor.zendure_proxy_uptime
+      - sensor.zendure_proxy_queue_get_depth
+      - sensor.zendure_proxy_queue_post_depth
+      - sensor.zendure_proxy_device_1_queue_depth
+      - sensor.zendure_proxy_device_2_queue_depth
+      - sensor.zendure_proxy_device_3_queue_depth
+      - sensor.zendure_proxy_incoming_get_requests_per_second_5m
+      - sensor.zendure_proxy_incoming_get_latency_samples_5m
+      - sensor.zendure_proxy_incoming_post_requests_per_second_5m
+      - sensor.zendure_proxy_incoming_post_latency_samples_5m
+      - sensor.zendure_proxy_device_1_get_requests_per_second_5m
+      - sensor.zendure_proxy_device_1_get_latency_samples_5m
+      - sensor.zendure_proxy_device_1_post_requests_per_second_5m
+      - sensor.zendure_proxy_device_1_post_latency_samples_5m
+      - sensor.zendure_proxy_device_2_get_requests_per_second_5m
+      - sensor.zendure_proxy_device_2_get_latency_samples_5m
+      - sensor.zendure_proxy_device_2_post_requests_per_second_5m
+      - sensor.zendure_proxy_device_2_post_latency_samples_5m
+      - sensor.zendure_proxy_device_3_get_requests_per_second_5m
+      - sensor.zendure_proxy_device_3_get_latency_samples_5m
+      - sensor.zendure_proxy_device_3_post_requests_per_second_5m
+      - sensor.zendure_proxy_device_3_post_latency_samples_5m
+      - sensor.zendure_2400_ac_resterende_oplaad_tijd
+      - sensor.zendure_2400_ac_resterende_ontlaad_tijd
+      - sensor.zendure_2400_ac_signaalsterkte
+      - sensor.zendure_2400_ac_aantal_batterijen
+      - sensor.zendure_2400_ac_batterij_serienummers
+      - sensor.zendure_2400_ac_totale_capaciteit
+      - sensor.zendure_2400_ac_serienummer
+      - sensor.zendure_2400_ac_productserie
+
+automation:
+  - id: zendure_proxy_p03_retention
+    alias: Zendure proxy P03 seven-day history
+    triggers:
+      - trigger: time
+        at: "04:20:00"
+    actions:
+      - action: recorder.purge_entities
+        data:
+          keep_days: 7
+          entity_id:
+            - sensor.zendure_1_modus
+            - sensor.zendure_1_relais_stand
+            - sensor.zendure_1_kalibratie_bezig
+            - sensor.zendure_1_opslagmodus
+            - sensor.zendure_1_deep_standby
+            - sensor.zendure_1_soc_limiet_status
+            - sensor.zendure_1_offgrid_modus
+            - sensor.zendure_2_modus
+            - sensor.zendure_2_relais_stand
+            - sensor.zendure_2_kalibratie_bezig
+            - sensor.zendure_2_opslagmodus
+            - sensor.zendure_2_deep_standby
+            - sensor.zendure_2_soc_limiet_status
+            - sensor.zendure_2_offgrid_modus
+            - sensor.zendure_3_modus
+            - sensor.zendure_3_relais_stand
+            - sensor.zendure_3_kalibratie_bezig
+            - sensor.zendure_3_opslagmodus
+            - sensor.zendure_3_deep_standby
+            - sensor.zendure_3_soc_limiet_status
+            - sensor.zendure_3_offgrid_modus
+            - sensor.zendure_actief_device
+    mode: single

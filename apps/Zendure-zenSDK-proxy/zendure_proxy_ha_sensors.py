@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 
 
 SensorMap = dict[str, tuple[Any, dict[str, Any]]]
@@ -20,9 +21,23 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
     degraded_slots = _health_slots(health, "degradedDevices")
     dead_slots = _health_slots(health, "deadDevices")
     unavailable_slots = excluded_slots | recovering_slots | dead_slots
+    successful_gets = health.get("lastSuccessfulGetAtBySlot", {})
     sensors: SensorMap = {}
 
     def add(entity_id: str, state: Any, friendly_name: str, **attrs: Any) -> None:
+        slot = re.fullmatch(r"sensor\.(?:zendure_(\d+)_.+|vermogensopdracht_zendure_(\d+))", entity_id)
+        if slot and int(slot.group(1) or slot.group(2)) > MAX_SENSOR_DEVICES:
+            slot = None
+        if "proxy_last_successful_get_at" not in attrs:
+            if slot:
+                attrs["proxy_last_successful_get_at"] = successful_gets.get(slot.group(1) or slot.group(2))
+            elif successful_gets:
+                timestamps = list(successful_gets.values())
+                attrs["proxy_last_successful_get_at"] = (
+                    min(timestamps) if all(timestamps) else None
+                )
+        if entity_id == "sensor.proxy_zendure_pool_healthy":
+            attrs["proxy_last_successful_get_at_by_slot"] = dict(successful_gets)
         sensors[entity_id] = (state, {"friendly_name": friendly_name, **attrs})
 
     sensor_device_count = min(MAX_SENSOR_DEVICES, max(3, configured_count))
@@ -377,24 +392,37 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
     )
 
     battery_order = _battery_order(battery_order_raw)
+    pack_slots = response.get("packDeviceSlots") or []
     for battery in range(7, 19):
         pack = _pack_at(pack_data, battery_order, battery)
+        index = _pack_index(battery_order, battery)
+        slot = pack_slots[index] if 0 <= index < len(pack_slots) else None
+        pack_unavailable = slot in unavailable_slots if slot else bool(unavailable_slots)
+        source_attrs = ({"proxy_source_slot": slot,
+                         "proxy_last_successful_get_at": successful_gets.get(str(slot))}
+                        if slot else {})
         add(
             f"sensor.zendure_2400_ac_batterij_{battery}_laadpercentage",
-            pack.get("socLevel", "unknown") if pack else "unknown",
+            "unavailable" if pack_unavailable else (
+                pack.get("socLevel", "unknown") if pack else "unknown"
+            ),
             f"Zendure 2400 AC Batterij {battery} Laadpercentage",
             device_class="battery",
             unit_of_measurement="%",
             state_class="measurement",
+            **source_attrs,
         )
         add(
             f"sensor.zendure_2400_ac_batterij_{battery}_temperatuur",
-            _zendure_temp(pack.get("maxTemp", 2731)) if pack else "unknown",
+            "unavailable" if pack_unavailable else (
+                _zendure_temp(pack.get("maxTemp", 2731)) if pack else "unknown"
+            ),
             f"Zendure 2400 AC Batterij {battery} Temperatuur",
             unit_of_measurement="°C",
             state_class="measurement",
             device_class="temperature",
             icon="mdi:thermometer",
+            **source_attrs,
         )
 
     return sensors
@@ -530,13 +558,18 @@ def _battery_order(raw: Any) -> list[int] | None:
 
 
 def _pack_at(pack_data: list[dict], battery_order: list[int] | None, battery: int) -> dict | None:
+    idx = _pack_index(battery_order, battery)
+    if idx < 0 or idx >= len(pack_data):
+        return None
+    return pack_data[idx]
+
+
+def _pack_index(battery_order: list[int] | None, battery: int) -> int:
     default_idx = battery - 1
     idx = default_idx
     if battery_order is not None and default_idx < len(battery_order):
         idx = battery_order[default_idx]
-    if idx < 0 or idx >= len(pack_data):
-        return None
-    return pack_data[idx]
+    return idx
 
 
 def _int(value: Any, default: int = 0) -> int:

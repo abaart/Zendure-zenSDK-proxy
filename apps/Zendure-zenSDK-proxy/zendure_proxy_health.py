@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import time
 from typing import Any
 
 from zendure_proxy_config import Config
@@ -118,6 +119,7 @@ def record_get_results(
         if dev.excluded_since_ts > 0 and dev.recovery_started_ts <= 0:
             dev.recovery_started_ts = ts
         dev.last_successful_get_ts = ts
+        dev.last_successful_get_epoch = time.time()
         dev.last_get_error = ""
         if result.get("sn"):
             dev.sn = result["sn"]
@@ -230,6 +232,10 @@ def health_summary(
 
     return {
         "configuredCount": state.device_count,
+        "lastSuccessfulGetAtBySlot": {
+            str(idx + 1): dev.last_successful_get_epoch or None
+            for idx, dev in enumerate(state.devices[:state.device_count])
+        },
         "healthyCount": healthy_count,
         "unhealthyCount": len(unhealthy),
         "excludedCount": len(excluded),

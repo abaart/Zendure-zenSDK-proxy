@@ -209,6 +209,8 @@ zendure_proxy:
   metrics_dashboard_route: "zendure_proxy_metrics"
   metrics_dashboard_refresh: 10
   metrics_ha_sensors_enabled: true
+  # Decision timer uses min(interval, 10); queue changes publish every 10s,
+  # other changed metrics every 60s; unchanged metrics have an hourly heartbeat.
   metrics_ha_sensors_interval: 30
 
   # Proxy response HA sensors.

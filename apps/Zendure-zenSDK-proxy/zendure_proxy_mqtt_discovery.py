@@ -33,7 +33,7 @@ def mqtt_sensor_config(
         "default_entity_id": entity_id,
         "state_topic": state_topic,
         "json_attributes_topic": attrs_topic,
-        "force_update": True,
+        "force_update": False,
         "device": {
             "identifiers": ["zendure_proxy"],
             "name": "Zendure zenSDK Proxy",

@@ -29,6 +29,7 @@ class DeviceState:
     latest_ac_mode_change_ts: float = 0.0
     last_response: Optional[dict] = None
     last_successful_get_ts: float = 0.0
+    last_successful_get_epoch: float = 0.0
     last_failed_get_ts: float = 0.0
     last_get_error: str = ""
     last_successful_post_ts: float = 0.0

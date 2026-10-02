@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from copy import deepcopy
+import json
 from pathlib import Path
 import sys
 import types
@@ -384,12 +387,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         await proxy._publish_health_transition_sensors(response, force_all=True)
 
-        self.assertEqual(
-            written_states["sensor.proxy_zendure_pool_healthy"][0],
-            "Degraded",
-        )
-        self.assertEqual(written_states["sensor.zendure_1_health"][0], "Healthy")
-        self.assertEqual(written_states["sensor.zendure_2_health"][0], "Degraded")
+        self.assertEqual(written_states, {})
         self.assertEqual(len(log_lines), 1)
         written_states.clear()
 
@@ -427,15 +425,9 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         await proxy._publish_health_transition_sensors(dead_response)
 
-        self.assertEqual(
-            written_states["sensor.proxy_zendure_pool_healthy"][0],
-            "Degraded",
-        )
+        self.assertNotIn("sensor.proxy_zendure_pool_healthy", written_states)
         self.assertEqual(written_states["sensor.zendure_2_health"][0], "Dead")
-        self.assertEqual(
-            written_states["sensor.zendure_2_laadpercentage"][0],
-            "unavailable",
-        )
+        self.assertNotIn("sensor.zendure_2_laadpercentage", written_states)
         self.assertEqual(len(log_lines), 2)
         self.assertEqual(log_lines[1][1], "WARNING")
         self.assertIn("Zendure pool dead: slot=2", log_lines[1][0])
@@ -564,7 +556,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(published_responses), 1)
         self.assertEqual(published_responses[0][0]["proxyHealth"]["reason"], "fresh")
-        self.assertTrue(published_responses[0][1])
+        self.assertFalse(published_responses[0][1])
         self.assertEqual(proxy._state.devices[0].sn, "SN1")
         self.assertGreater(proxy._state.last_upstream_get_ts, 0)
         self.assertFalse(proxy._state.get_refresh_in_progress)
@@ -691,6 +683,7 @@ class AppDaemonAsyncBoundaryTests(unittest.IsolatedAsyncioTestCase):
             (proxy._refresh_proxy_ha_sensors, "now", 300),
             run_every_calls,
         )
+        self.assertIn((proxy._publish_metrics_sensors, "now", 10), run_every_calls)
         self.assertFalse(hasattr(proxy, "_proxy_ha_degraded_slots"))
 
     async def test_gielz_compat_endpoint_routes_report_path_to_get(self) -> None:
@@ -2223,6 +2216,305 @@ def _device(
             "solarPower4": 4,
         },
     }
+
+
+class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    def make_proxy(self, *, awaitable=False):
+        proxy = ZendureProxy.__new__(ZendureProxy)
+        proxy._cfg = Config(device_ips=["ip1", "ip2", "ip3"])
+        proxy._mqtt_api = None
+        proxy._mqtt_sensor_error_logged = False
+        proxy._proxy_ha_sensor_owned_entities = set()
+        proxy._metrics = MetricsRegistry(3)
+        proxy._proxy_log = lambda *args, **kwargs: None
+        proxy.writes = []
+        proxy.ha_states = {}
+
+        def result(value):
+            return asyncio.create_task(asyncio.sleep(0, result=value)) if awaitable else value
+
+        def get_state(entity_id, attribute=None):
+            return result(proxy.ha_states.get(entity_id))
+
+        def set_state(entity_id, **kwargs):
+            proxy.writes.append((entity_id, deepcopy(kwargs)))
+            proxy.ha_states[entity_id] = {"state": kwargs["state"], "attributes": kwargs["attributes"]}
+            return result(None)
+
+        proxy.get_state = get_state
+        proxy.set_state = set_state
+        return proxy
+
+    async def test_intervals_and_hour_day_heartbeats_with_direct_and_task_apis(self):
+        intervals = {
+            "sensor.zendure_1_vermogen_aansturing": 0,
+            "sensor.vermogensopdracht_zendure_1": 0,
+            "sensor.zendure_1_laadpercentage": 0,
+            "sensor.zendure_1_modus": 0,
+            "sensor.relay_saver_resterende_seconden": 10,
+            "sensor.anti_pingpong_smart_netto_euro": 60,
+            "sensor.zendure_1_omvormer_temperatuur": 600,
+            "sensor.zendure_1_serienummer": 0,
+        }
+        for awaitable in (False, True):
+            for entity_id, interval in intervals.items():
+                with self.subTest(awaitable=awaitable, entity_id=entity_id):
+                    proxy = self.make_proxy(awaitable=awaitable)
+                    sensors = {entity_id: ("10", {"friendly_name": "Test"})}
+                    with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors), patch("zendure_proxy.now", return_value=100):
+                        await proxy._publish_proxy_ha_sensors({})
+                        await proxy._publish_proxy_ha_sensors({})
+                    self.assertEqual(len(proxy.writes), 1)
+                    sensors[entity_id] = ("20", {"friendly_name": "Test"})
+                    if interval:
+                        with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors), patch("zendure_proxy.now", return_value=100 + interval - 1):
+                            await proxy._publish_proxy_ha_sensors({})
+                        self.assertEqual(len(proxy.writes), 1)
+                    with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors), patch("zendure_proxy.now", return_value=100 + interval):
+                        await proxy._publish_proxy_ha_sensors({})
+                    self.assertEqual(len(proxy.writes), 2)
+                    heartbeat = 86400 if entity_id.endswith("serienummer") else 3600
+                    with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors):
+                        with patch("zendure_proxy.now", return_value=100 + interval + heartbeat - 1):
+                            await proxy._publish_proxy_ha_sensors({})
+                        self.assertEqual(len(proxy.writes), 2)
+                        with patch("zendure_proxy.now", return_value=100 + interval + heartbeat):
+                            await proxy._publish_proxy_ha_sensors({})
+                    self.assertEqual(len(proxy.writes), 3)
+
+    async def test_health_attributes_throttled_but_state_transitions_immediate(self):
+        proxy = self.make_proxy()
+        entity_id = "sensor.zendure_1_health"
+        sensors = {entity_id: ("Healthy", {"age": 1})}
+        with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors):
+            for ts, state, age in [(100, "Healthy", 1), (101, "Healthy", 2),
+                                   (160, "Healthy", 3), (161, "Degraded", 4),
+                                   (162, "Dead", 5), (163, "Healthy", 6)]:
+                sensors[entity_id] = (state, {"age": age})
+                with patch("zendure_proxy.now", return_value=ts):
+                    await proxy._publish_proxy_ha_sensors({})
+        self.assertEqual([item[1]["state"] for item in proxy.writes],
+                         ["Healthy", "Healthy", "Degraded", "Dead", "Healthy"])
+
+    async def test_temperature_unavailable_recovery_and_countdown_end_are_immediate(self):
+        for entity_id, values in [
+            ("sensor.zendure_1_omvormer_temperatuur", ["20", "unavailable", "21"]),
+            ("sensor.zendure_2400_ac_batterij_7_temperatuur", ["20", "unknown", "21"]),
+            ("sensor.relay_saver_resterende_seconden", ["10", "0", "9"]),
+        ]:
+            proxy = self.make_proxy()
+            sensors = {}
+            with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors):
+                for index, value in enumerate(values):
+                    sensors[entity_id] = (value, {})
+                    with patch("zendure_proxy.now", return_value=100 + index):
+                        await proxy._publish_proxy_ha_sensors({})
+            expected = values if "temperatuur" in entity_id else values[:2]
+            self.assertEqual([item[1]["state"] for item in proxy.writes], expected)
+
+    async def test_restart_recognizes_owned_marker_without_claiming_rest_sensors(self):
+        for marker, owned in [(True, True), ("true", True), ("True", True),
+                              (False, False), ("false", False), (None, False)]:
+            proxy = self.make_proxy()
+            entity_id = "sensor.anti_pingpong_status"
+            proxy.ha_states[entity_id] = {"state": "Uit", "attributes": {"zendure_proxy_managed": marker}}
+            with patch("zendure_proxy.build_proxy_ha_sensors", return_value={entity_id: ("Aan", {})}):
+                await proxy._publish_proxy_ha_sensors({})
+            self.assertEqual(bool(proxy.writes), owned)
+
+    async def test_concurrent_report_publications_write_identical_values_once(self):
+        proxy = self.make_proxy(awaitable=True)
+        response = {"properties": {}, "packData": [], "proxyVersion": "test"}
+        with patch("zendure_proxy.now", return_value=100):
+            await asyncio.gather(*(proxy._publish_report_sensors(response) for _ in range(3)))
+        entity_ids = [item[0] for item in proxy.writes]
+        self.assertEqual(len(entity_ids), len(set(entity_ids)))
+        self.assertIn("sensor.zendure_3_deep_standby", entity_ids)
+
+    async def test_failed_write_is_retried_and_does_not_advance_publication_clock(self):
+        proxy = self.make_proxy()
+        entity_id = "sensor.zendure_1_omvormer_temperatuur"
+        actual = proxy.set_state
+        proxy.set_state = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("failed"))
+        with patch("zendure_proxy.build_proxy_ha_sensors", return_value={entity_id: (20, {})}), patch("zendure_proxy.now", return_value=100):
+            await proxy._publish_proxy_ha_sensors({})
+            self.assertNotIn(entity_id, proxy._sensor_publications.published)
+            proxy.set_state = actual
+            await proxy._publish_proxy_ha_sensors({})
+        self.assertEqual(len(proxy.writes), 1)
+
+    async def test_metrics_queue_ten_seconds_counters_sixty_seconds_and_hourly_heartbeat(self):
+        for awaitable in (False, True):
+            proxy = self.make_proxy(awaitable=awaitable)
+            queue = "sensor.zendure_proxy_queue_get_depth"
+            counter = "sensor.zendure_proxy_incoming_get_total"
+            sensors = {queue: (0, {}), counter: (0, {"state_class": "total_increasing"})}
+            with patch.object(proxy._metrics, "flat_ha_sensors", return_value=sensors):
+                with patch("zendure_proxy.now", return_value=100):
+                    await proxy._publish_metrics_sensors()
+                self.assertTrue(all(item[1]["state"] == "0" for item in proxy.writes))
+                sensors[queue] = (1, {})
+                sensors[counter] = (1, {"state_class": "total_increasing"})
+                for ts, count in [(109, 2), (110, 3), (159, 3), (160, 4), (3760, 6)]:
+                    with patch("zendure_proxy.now", return_value=ts):
+                        await proxy._publish_metrics_sensors()
+                    self.assertEqual(len(proxy.writes), count)
+
+    async def test_mqtt_config_change_reconnect_and_awaitable_api(self):
+        proxy = self.make_proxy(awaitable=True)
+        published = []
+        proxy._mqtt_api = types.SimpleNamespace(mqtt_publish=lambda topic, payload, **kwargs:
+            asyncio.create_task(asyncio.sleep(0, result=published.append((topic, payload)))))
+        entity_id = "sensor.zendure_1_vermogen_aansturing"
+        sensors = {entity_id: (10, {"friendly_name": "Power"})}
+        with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors), patch("zendure_proxy.now", return_value=100):
+            await proxy._publish_proxy_ha_sensors({})
+            self.assertEqual(len(published), 3)
+            self.assertFalse(json.loads(published[0][1])["force_update"])
+            sensors[entity_id] = (11, {"friendly_name": "Power"})
+            await proxy._publish_proxy_ha_sensors({})
+            self.assertEqual(len(published), 5)
+            sensors[entity_id] = (11, {"friendly_name": "Measured Power"})
+            await proxy._publish_proxy_ha_sensors({})
+            self.assertEqual(len(published), 8)
+            await proxy._mqtt_connection_changed("MQTT_MESSAGE", {}, {})
+            await proxy._publish_proxy_ha_sensors({})
+            self.assertEqual(len(published), 11)
+
+    async def test_cache_heartbeat_keeps_last_real_measurement_timestamp(self):
+        proxy = self.make_proxy()
+        response = {"properties": {"gridInputPower_1": 250}, "packData": [],
+                    "proxyHealth": {"configuredCount": 3, "lastSuccessfulGetAtBySlot": {"1": 1234, "2": 1200, "3": 1250}}}
+        entity_id = "sensor.zendure_1_vermogen_aansturing"
+        with patch("zendure_proxy.now", return_value=100), patch("zendure_proxy.time.time", return_value=2000):
+            await proxy._publish_report_sensors(response)
+        first = deepcopy(proxy.ha_states[entity_id])
+        proxy.writes.clear()
+        response["proxyHealth"].update(servedFromCache=True, reason="rate_limited")
+        with patch("zendure_proxy.now", return_value=3699):
+            await proxy._publish_report_sensors(response, force_health_sensor_refresh=True)
+        self.assertEqual(proxy.writes, [])
+        with patch("zendure_proxy.now", return_value=3700), patch("zendure_proxy.time.time", return_value=5600):
+            await proxy._publish_report_sensors(response)
+        latest = proxy.ha_states[entity_id]
+        self.assertEqual(latest["attributes"]["proxy_last_successful_get_at"], 1234)
+        self.assertEqual(first["attributes"]["proxy_updated_at"], "2000")
+        self.assertEqual(latest["attributes"]["proxy_updated_at"], "5600")
+        self.assertNotIn("sensor.zendure_1_serienummer", [item[0] for item in proxy.writes])
+
+    def test_success_timestamps_advance_on_device_success_only(self):
+        state = ProxyState(device_count=2, devices=[DeviceState(ip="ip1"), DeviceState(ip="ip2")], startup_ts=90)
+        cfg = Config(device_ips=["ip1", "ip2"])
+        with patch("zendure_proxy_health.time.time", return_value=1000):
+            record_get_results(state, cfg, [_device(1, "SN1"), _device(2, "SN2")], current_ts=100)
+        with patch("zendure_proxy_health.time.time", return_value=1100):
+            record_get_results(state, cfg, [_device(1, "SN1"), None], current_ts=101)
+        response = response_with_proxy_health({"properties": {}, "packData": []}, state, cfg,
+            served_from_cache=True, reason="ha_get_timeout", refresh_in_progress=True, current_ts=105)
+        self.assertEqual(response["proxyHealth"]["lastSuccessfulGetAtBySlot"], {"1": 1100, "2": 1000})
+        self.assertEqual(state.devices[1].last_successful_get_epoch, 1000)
+
+    async def test_heartbeat_timer_publishes_without_fetching_and_preserves_daily_exception(self):
+        proxy = self.make_proxy()
+        proxy._state = ProxyState(device_count=3, devices=[DeviceState(ip=f"ip{i}", last_successful_get_ts=100)
+            for i in range(1, 4)], startup_ts=100)
+        response = {"properties": {}, "packData": [], "proxyVersion": "test"}
+        proxy._state.last_get_response = response
+        proxy._cfg.degraded_power_hold_seconds = 100000
+        with patch("zendure_proxy.now", return_value=100):
+            await proxy._publish_report_sensors(response)
+            await proxy._publish_metrics_sensors()
+        proxy.writes.clear()
+        with patch("zendure_proxy.now", return_value=3640), patch("zendure_proxy_health.now", return_value=3640), patch("zendure_proxy.execute_get") as fetch:
+            await proxy._publish_sensor_heartbeats()
+            fetch.assert_not_called()
+        entities = [item[0] for item in proxy.writes]
+        self.assertIn("sensor.zendure_1_vermogen_aansturing", entities)
+        self.assertNotIn("sensor.zendure_proxy_versie", entities)
+        self.assertNotIn("sensor.zendure_1_serienummer", entities)
+        self.assertIn("sensor.zendure_proxy_incoming_get_total", entities)
+
+    async def test_mqtt_offline_fallback_is_republished_on_observed_reconnect(self):
+        for awaitable in (False, True):
+            proxy = self.make_proxy(awaitable=awaitable)
+            connected = True
+            published = []
+
+            def connection_state():
+                return asyncio.create_task(asyncio.sleep(0, result=connected)) if awaitable else connected
+
+            proxy._mqtt_api = types.SimpleNamespace(
+                mqtt_publish=lambda topic, payload, **kwargs: published.append((topic, payload)),
+                is_client_connected=connection_state,
+            )
+            sensors = {"sensor.zendure_1_vermogen_aansturing": (10, {})}
+            with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors), patch("zendure_proxy.now", return_value=100):
+                await proxy._publish_proxy_ha_sensors({})
+                connected = False
+                sensors["sensor.zendure_1_vermogen_aansturing"] = (11, {})
+                await proxy._publish_proxy_ha_sensors({})
+                self.assertEqual(len(proxy.writes), 1)
+                connected = True
+                await proxy._publish_proxy_ha_sensors({})
+            self.assertEqual(len(published), 6)
+            self.assertEqual(len([topic for topic, _payload in published if topic.endswith("/config")]), 2)
+
+    async def test_initialize_registers_timers_and_mqtt_listener_with_direct_and_task_apis(self):
+        for awaitable in (False, True):
+            proxy = self.make_proxy()
+            proxy.args = {"ip_zendure_1": "ip1", "proxy_ha_sensors_enabled": True}
+            proxy._create_file_logger = lambda: None
+            proxy._restore_metrics_counters_from_ha = _noop_record_depths
+            proxy._start_server = _noop_record_depths
+            proxy.log = lambda *_args, **_kwargs: None
+            timers = []
+            listeners = []
+
+            def result(value):
+                return asyncio.create_task(asyncio.sleep(0, result=value)) if awaitable else value
+
+            def run_every(callback, start, interval):
+                timers.append((callback, interval))
+                return result(f"timer-{interval}")
+
+            def listen_event(callback, event, **kwargs):
+                listeners.append((callback, event, kwargs))
+                return result("mqtt-listener")
+
+            mqtt = types.SimpleNamespace(listen_event=listen_event)
+            proxy._get_mqtt_api = lambda: mqtt
+            proxy.register_endpoint = lambda *_args: result("endpoint")
+            proxy.register_route = lambda *_args: result("route")
+            proxy.run_every = run_every
+            with patch("zendure_proxy.DeviceClient", lambda *_args, **_kwargs: object()):
+                await proxy.initialize()
+            proxy._processor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await proxy._processor_task
+            self.assertIn((proxy._publish_sensor_heartbeats, 60), timers)
+            self.assertIn((proxy._publish_metrics_sensors, 10), timers)
+            self.assertIn((proxy._refresh_proxy_ha_sensors, 300), timers)
+            self.assertEqual(proxy._mqtt_connection_handle, "mqtt-listener")
+            self.assertEqual(listeners[0][1:], ("MQTT_MESSAGE", {"state": "Connected", "topic": None}))
+
+    def test_pack_source_mapping_preserves_rest_payload_and_healthy_pack_availability(self):
+        results = [_device(1, "SN1"), _device(2, "SN2")]
+        state = ProxyState(device_count=2, devices=[DeviceState(ip="ip1"), DeviceState(ip="ip2")])
+        cfg = Config(device_ips=["ip1", "ip2"])
+        response = build_combined_response(results, state, cfg)
+        self.assertEqual(response["packData"], results[0]["packData"] + results[1]["packData"])
+        self.assertEqual(response["packDeviceSlots"], [1] * len(results[0]["packData"]) + [2] * len(results[1]["packData"]))
+        self.assertEqual(response["inverterTemperatureDeviceSlots"], [1, 2])
+        response["packData"] = [{"socLevel": 40, "maxTemp": 3001} for _ in range(7)]
+        response["packDeviceSlots"] = [1] * 6 + [2]
+        response["proxyHealth"] = {"configuredCount": 2, "excludedDevices": [{"slot": 1}],
+                                   "lastSuccessfulGetAtBySlot": {"1": 1000, "2": 1100}}
+        sensor = build_proxy_ha_sensors(response)["sensor.zendure_2400_ac_batterij_7_temperatuur"]
+        self.assertEqual(sensor[0], 27)
+        self.assertEqual(sensor[1]["proxy_source_slot"], 2)
+        self.assertEqual(sensor[1]["proxy_last_successful_get_at"], 1100)
+        sensors = build_proxy_ha_sensors(response, ";".join(["1"] * 7))
+        self.assertEqual(sensors["sensor.zendure_2400_ac_batterij_7_temperatuur"][0], "unavailable")
 
 
 if __name__ == "__main__":
