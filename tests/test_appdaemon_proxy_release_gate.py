@@ -1015,6 +1015,21 @@ class DeviceClientPostFailureTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProxySensorCompatibilityTests(unittest.TestCase):
+    def test_rssi_is_per_device_and_invalid_or_excluded_readings_are_unavailable(self):
+        response = _combined_three_device_response()
+        for n in range(1, 4):
+            self.assertEqual(response["properties"][f"rssi_{n}"], -40)
+        response["properties"].update(rssi_1=-82, rssi_2=-61, rssi_3=-70)
+        sensors = build_proxy_ha_sensors(response)
+        self.assertEqual([sensors[f"sensor.zendure_{n}_wifi_rssi"][0] for n in range(1, 4)], [-82, -61, -70])
+        self.assertEqual(sensors["sensor.zendure_1_wifi_rssi"][1]["unit_of_measurement"], "dBm")
+        for invalid in [None, 0, "unknown", -121, float("nan")]:
+            response["properties"]["rssi_1"] = invalid
+            self.assertEqual(build_proxy_ha_sensors(response)["sensor.zendure_1_wifi_rssi"][0], "unavailable")
+        response["properties"]["rssi_1"] = -82
+        response["proxyHealth"]["excludedDevices"] = [{"slot": 1}]
+        self.assertEqual(build_proxy_ha_sensors(response)["sensor.zendure_1_wifi_rssi"][0], "unavailable")
+
     def test_get_cache_config_defaults_and_overrides_are_loaded(self) -> None:
         default_cfg = Config(device_ips=[])
         self.assertEqual(default_cfg.zendure_request_timeout, 60.0)
@@ -2253,6 +2268,7 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "sensor.zendure_1_modus": 0,
             "sensor.relay_saver_resterende_seconden": 10,
             "sensor.anti_pingpong_smart_netto_euro": 60,
+            "sensor.zendure_1_wifi_rssi": 60,
             "sensor.zendure_1_omvormer_temperatuur": 600,
             "sensor.zendure_1_serienummer": 0,
         }
@@ -2273,7 +2289,7 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors), patch("zendure_proxy.now", return_value=100 + interval):
                         await proxy._publish_proxy_ha_sensors({})
                     self.assertEqual(len(proxy.writes), 2)
-                    heartbeat = 86400 if entity_id.endswith("serienummer") else 3600
+                    heartbeat = 60 if entity_id.endswith("wifi_rssi") else (86400 if entity_id.endswith("serienummer") else 3600)
                     with patch("zendure_proxy.build_proxy_ha_sensors", return_value=sensors):
                         with patch("zendure_proxy.now", return_value=100 + interval + heartbeat - 1):
                             await proxy._publish_proxy_ha_sensors({})
@@ -2424,7 +2440,7 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cache_heartbeat_keeps_last_real_measurement_timestamp(self):
         proxy = self.make_proxy()
-        response = {"properties": {"gridInputPower_1": 250}, "packData": [],
+        response = {"properties": {"gridInputPower_1": 250, "rssi_1": -65}, "packData": [],
                     "proxyHealth": {"configuredCount": 3, "lastSuccessfulGetAtBySlot": {"1": 1234, "2": 1200, "3": 1250}}}
         entity_id = "sensor.zendure_1_vermogen_aansturing"
         with patch("zendure_proxy.now", return_value=100), patch("zendure_proxy.time.time", return_value=2000):
@@ -2434,7 +2450,11 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
         response["proxyHealth"].update(servedFromCache=True, reason="rate_limited")
         with patch("zendure_proxy.now", return_value=3699):
             await proxy._publish_report_sensors(response, force_health_sensor_refresh=True)
-        self.assertEqual(proxy.writes, [])
+        self.assertEqual({item[0] for item in proxy.writes}, {
+            f"sensor.zendure_{n}_wifi_rssi" for n in range(1, 4)
+        })
+        self.assertEqual(proxy.ha_states["sensor.zendure_1_wifi_rssi"]["attributes"]["proxy_last_successful_get_at"], 1234)
+        proxy.writes.clear()
         with patch("zendure_proxy.now", return_value=3700), patch("zendure_proxy.time.time", return_value=5600):
             await proxy._publish_report_sensors(response)
         latest = proxy.ha_states[entity_id]

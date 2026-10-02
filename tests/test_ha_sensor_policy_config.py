@@ -74,12 +74,15 @@ class HaSensorPolicyConfigTests(unittest.TestCase):
 
     def test_every_generated_proxy_and_metric_sensor_has_approved_policy(self):
         sensors = build_proxy_ha_sensors({"properties": {}, "packData": []})
-        self.assertEqual(len(sensors), 89)
+        self.assertEqual(len(sensors), 92)
         for entity_id in sensors:
             policy = publication_policy(entity_id)
             daily = entity_id.endswith(("_serienummer", "_ip_adres")) or entity_id == "sensor.zendure_proxy_versie"
-            self.assertEqual(policy.heartbeat, 86400 if daily else 3600)
-            if entity_id.endswith("_temperatuur"):
+            rssi = entity_id.endswith("_wifi_rssi")
+            self.assertEqual(policy.heartbeat, 60 if rssi else (86400 if daily else 3600))
+            if rssi:
+                interval = 60
+            elif entity_id.endswith("_temperatuur"):
                 interval = 600
             elif entity_id.endswith("_health") or entity_id == "sensor.proxy_zendure_pool_healthy" or entity_id.startswith("sensor.anti_pingpong_smart_"):
                 interval = 60

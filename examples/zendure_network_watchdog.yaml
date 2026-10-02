@@ -1,0 +1,399 @@
+# Install as /config/packages/zendure_network_watchdog.yaml.
+# Requires packages: !include_dir_named packages and proxy per-device RSSI sensors.
+# Set notify_service below to your own mobile app notification action.
+# Keep error/RSSI sample sensors in Recorder for statistics to restore after restart.
+# Notification helpers store Unix timestamps (0 means no notification yet).
+# Timers restore after restart; monitoring gaps >5 minutes reset duration claims.
+# An incident ends after 60 minutes below 100 errors/hour. RSSI uses a frozen
+# pre-incident average after >=6 hours of coverage. Missing/stale RSSI never alerts.
+# The 24h notification limit applies to both causes together, including new incidents.
+input_number:
+  zendure_1_network_last_notification:
+    name: Zendure 1 last network notification
+    min: 0
+    max: 4102444800
+    step: 1
+    mode: box
+    icon: mdi:clock-outline
+  zendure_2_network_last_notification:
+    name: Zendure 2 last network notification
+    min: 0
+    max: 4102444800
+    step: 1
+    mode: box
+    icon: mdi:clock-outline
+  zendure_3_network_last_notification:
+    name: Zendure 3 last network notification
+    min: 0
+    max: 4102444800
+    step: 1
+    mode: box
+    icon: mdi:clock-outline
+sensor:
+- platform: statistics
+  name: Zendure 1 errors last hour
+  unique_id: zendure_1_errors_last_hour
+  entity_id: sensor.zendure_1_error_counter_sample
+  state_characteristic: sum_differences_nonnegative
+  max_age:
+    hours: 1
+  sampling_size: 61
+  precision: 0
+- platform: statistics
+  name: Zendure 1 RSSI average 24h
+  unique_id: zendure_1_rssi_average_24h
+  entity_id: sensor.zendure_1_rssi_sample
+  state_characteristic: average_step
+  max_age:
+    hours: 24
+  sampling_size: 1441
+  precision: 1
+- platform: statistics
+  name: Zendure 2 errors last hour
+  unique_id: zendure_2_errors_last_hour
+  entity_id: sensor.zendure_2_error_counter_sample
+  state_characteristic: sum_differences_nonnegative
+  max_age:
+    hours: 1
+  sampling_size: 61
+  precision: 0
+- platform: statistics
+  name: Zendure 2 RSSI average 24h
+  unique_id: zendure_2_rssi_average_24h
+  entity_id: sensor.zendure_2_rssi_sample
+  state_characteristic: average_step
+  max_age:
+    hours: 24
+  sampling_size: 1441
+  precision: 1
+- platform: statistics
+  name: Zendure 3 errors last hour
+  unique_id: zendure_3_errors_last_hour
+  entity_id: sensor.zendure_3_error_counter_sample
+  state_characteristic: sum_differences_nonnegative
+  max_age:
+    hours: 1
+  sampling_size: 61
+  precision: 0
+- platform: statistics
+  name: Zendure 3 RSSI average 24h
+  unique_id: zendure_3_rssi_average_24h
+  entity_id: sensor.zendure_3_rssi_sample
+  state_characteristic: average_step
+  max_age:
+    hours: 24
+  sampling_size: 1441
+  precision: 1
+template:
+- triggers:
+  - trigger: time_pattern
+    minutes: /1
+  sensor:
+  - name: Zendure 1 error counter sample
+    unique_id: zendure_1_error_counter_sample
+    availability: |-
+      {{ is_number(states('sensor.zendure_proxy_device_1_errors_total')) }}
+    state: '{{ states(''sensor.zendure_proxy_device_1_errors_total'') }}'
+    attributes:
+      sampled_at: '{{ as_timestamp(now()) }}'
+  - name: Zendure 1 RSSI sample
+    unique_id: zendure_1_rssi_sample
+    device_class: signal_strength
+    unit_of_measurement: dBm
+    availability: |-
+      {% set e = 'sensor.zendure_1_wifi_rssi' %}
+      {{ is_number(states(e)) and -120 <= states(e) | float < 0 and as_timestamp(now()) - (state_attr(e, 'proxy_last_successful_get_at') | float(0)) < 300 }}
+    state: '{{ states(''sensor.zendure_1_wifi_rssi'') }}'
+    attributes:
+      sampled_at: '{{ as_timestamp(now()) }}'
+- triggers:
+  - trigger: time_pattern
+    minutes: /1
+    seconds: '15'
+  variables:
+    n: 1
+    limits: &id001
+      errors_per_hour: 100
+      connection_hours: 24
+      recovery_minutes: 60
+      rssi_delta_db: 10
+      rssi_minutes: 10
+      baseline_hours: 6
+      gap_seconds: 300
+    monitor: |-
+      {% set ts = as_timestamp(now()) %}
+      {% set p = state_attr('sensor.zendure_' ~ n ~ '_network_monitor', 'monitor') or {} %}
+      {% set continuous = ts - (p.get('checked_at', 0) | float(0)) <= limits.gap_seconds %}
+      {% set uptime = states.sensor.zendure_proxy_uptime %}
+      {% set running = uptime is defined and is_number(uptime.state) and ts - as_timestamp(uptime.last_updated, 0) < 180 %}
+      {% set errors_id = 'sensor.zendure_' ~ n ~ '_errors_last_hour' %}
+      {% set errors = states(errors_id) | float(0) %}
+      {% set connection_valid = running and is_number(states(errors_id)) and (state_attr(errors_id, 'age_coverage_ratio') | float(0)) >= 0.8 and (state_attr(errors_id, 'buffer_usage_ratio') | float(0)) >= 0.8 and states('sensor.zendure_' ~ n ~ '_health') in ['Healthy', 'Degraded', 'Dead'] %}
+      {% set bad = connection_valid and errors >= limits.errors_per_hour %}
+      {% set cs = p.get('connection_since', 0) | float(0) if continuous else 0 %}
+      {% set cr = p.get('connection_recovery_since', 0) | float(0) if continuous else 0 %}
+      {% if bad %}
+        {% set cs = cs or ts %}
+        {% set cr = 0 %}
+      {% elif connection_valid %}
+        {% set cr = (cr or ts) if cs else 0 %}
+        {% if cr and ts - cr >= limits.recovery_minutes * 60 %}{% set cs = 0 %}{% set cr = 0 %}{% endif %}
+      {% else %}
+        {% set cs = 0 %}{% set cr = 0 %}
+      {% endif %}
+      {% set rssi_id = 'sensor.zendure_' ~ n ~ '_wifi_rssi' %}
+      {% set raw = states(rssi_id) %}
+      {% set rssi = raw | float(0) %}
+      {% set fresh = running and is_number(raw) and -120 <= rssi < 0 and ts - (state_attr(rssi_id, 'proxy_last_successful_get_at') | float(0)) < 300 %}
+      {% set mean_id = 'sensor.zendure_' ~ n ~ '_rssi_average_24h' %}
+      {% set learned = is_number(states(mean_id)) and (state_attr(mean_id, 'age_coverage_ratio') | float(0)) >= limits.baseline_hours / 24 and (state_attr(mean_id, 'buffer_usage_ratio') | float(0)) >= limits.baseline_hours / 24 %}
+      {% set ws = p.get('wifi_since', 0) | float(0) if continuous else 0 %}
+      {% set ref = p.get('wifi_reference') if ws else none %}
+      {% if ref is none and learned %}{% set ref = states(mean_id) | float %}{% endif %}
+      {% set changed = fresh and ref is not none and (rssi - ref) | abs >= limits.rssi_delta_db %}
+      {% if changed %}
+        {% set ws = ws or ts %}
+      {% else %}
+        {% set ws = 0 %}{% set ref = none %}
+      {% endif %}
+      {{ dict(checked_at=ts, connection_since=cs, connection_recovery_since=cr,
+              connection_alert=bad and cs > 0 and ts - cs >= limits.connection_hours * 3600,
+              errors_last_hour=errors if connection_valid else none,
+              wifi_since=ws, wifi_reference=ref, wifi_alert=changed and ts - ws >= limits.rssi_minutes * 60,
+              rssi=rssi if fresh else none, average_rssi=states(mean_id) | float(none),
+              baseline_ready=learned, source_running=running, connection_hours=limits.connection_hours, rssi_minutes=limits.rssi_minutes) }}
+  sensor:
+  - name: Zendure 1 network monitor
+    unique_id: zendure_1_network_monitor
+    icon: mdi:access-point-network
+    state: |-
+      {% if monitor.connection_alert and monitor.wifi_alert %}Connection and Wi-Fi
+      {% elif monitor.connection_alert %}Connection
+      {% elif monitor.wifi_alert %}Wi-Fi
+      {% elif not monitor.source_running %}No data
+      {% elif not monitor.baseline_ready %}Learning
+      {% else %}OK{% endif %}
+    attributes:
+      monitor: '{{ monitor }}'
+- triggers:
+  - trigger: time_pattern
+    minutes: /1
+  sensor:
+  - name: Zendure 2 error counter sample
+    unique_id: zendure_2_error_counter_sample
+    availability: |-
+      {{ is_number(states('sensor.zendure_proxy_device_2_errors_total')) }}
+    state: '{{ states(''sensor.zendure_proxy_device_2_errors_total'') }}'
+    attributes:
+      sampled_at: '{{ as_timestamp(now()) }}'
+  - name: Zendure 2 RSSI sample
+    unique_id: zendure_2_rssi_sample
+    device_class: signal_strength
+    unit_of_measurement: dBm
+    availability: |-
+      {% set e = 'sensor.zendure_2_wifi_rssi' %}
+      {{ is_number(states(e)) and -120 <= states(e) | float < 0 and as_timestamp(now()) - (state_attr(e, 'proxy_last_successful_get_at') | float(0)) < 300 }}
+    state: '{{ states(''sensor.zendure_2_wifi_rssi'') }}'
+    attributes:
+      sampled_at: '{{ as_timestamp(now()) }}'
+- triggers:
+  - trigger: time_pattern
+    minutes: /1
+    seconds: '15'
+  variables:
+    n: 2
+    limits: *id001
+    monitor: |-
+      {% set ts = as_timestamp(now()) %}
+      {% set p = state_attr('sensor.zendure_' ~ n ~ '_network_monitor', 'monitor') or {} %}
+      {% set continuous = ts - (p.get('checked_at', 0) | float(0)) <= limits.gap_seconds %}
+      {% set uptime = states.sensor.zendure_proxy_uptime %}
+      {% set running = uptime is defined and is_number(uptime.state) and ts - as_timestamp(uptime.last_updated, 0) < 180 %}
+      {% set errors_id = 'sensor.zendure_' ~ n ~ '_errors_last_hour' %}
+      {% set errors = states(errors_id) | float(0) %}
+      {% set connection_valid = running and is_number(states(errors_id)) and (state_attr(errors_id, 'age_coverage_ratio') | float(0)) >= 0.8 and (state_attr(errors_id, 'buffer_usage_ratio') | float(0)) >= 0.8 and states('sensor.zendure_' ~ n ~ '_health') in ['Healthy', 'Degraded', 'Dead'] %}
+      {% set bad = connection_valid and errors >= limits.errors_per_hour %}
+      {% set cs = p.get('connection_since', 0) | float(0) if continuous else 0 %}
+      {% set cr = p.get('connection_recovery_since', 0) | float(0) if continuous else 0 %}
+      {% if bad %}
+        {% set cs = cs or ts %}
+        {% set cr = 0 %}
+      {% elif connection_valid %}
+        {% set cr = (cr or ts) if cs else 0 %}
+        {% if cr and ts - cr >= limits.recovery_minutes * 60 %}{% set cs = 0 %}{% set cr = 0 %}{% endif %}
+      {% else %}
+        {% set cs = 0 %}{% set cr = 0 %}
+      {% endif %}
+      {% set rssi_id = 'sensor.zendure_' ~ n ~ '_wifi_rssi' %}
+      {% set raw = states(rssi_id) %}
+      {% set rssi = raw | float(0) %}
+      {% set fresh = running and is_number(raw) and -120 <= rssi < 0 and ts - (state_attr(rssi_id, 'proxy_last_successful_get_at') | float(0)) < 300 %}
+      {% set mean_id = 'sensor.zendure_' ~ n ~ '_rssi_average_24h' %}
+      {% set learned = is_number(states(mean_id)) and (state_attr(mean_id, 'age_coverage_ratio') | float(0)) >= limits.baseline_hours / 24 and (state_attr(mean_id, 'buffer_usage_ratio') | float(0)) >= limits.baseline_hours / 24 %}
+      {% set ws = p.get('wifi_since', 0) | float(0) if continuous else 0 %}
+      {% set ref = p.get('wifi_reference') if ws else none %}
+      {% if ref is none and learned %}{% set ref = states(mean_id) | float %}{% endif %}
+      {% set changed = fresh and ref is not none and (rssi - ref) | abs >= limits.rssi_delta_db %}
+      {% if changed %}
+        {% set ws = ws or ts %}
+      {% else %}
+        {% set ws = 0 %}{% set ref = none %}
+      {% endif %}
+      {{ dict(checked_at=ts, connection_since=cs, connection_recovery_since=cr,
+              connection_alert=bad and cs > 0 and ts - cs >= limits.connection_hours * 3600,
+              errors_last_hour=errors if connection_valid else none,
+              wifi_since=ws, wifi_reference=ref, wifi_alert=changed and ts - ws >= limits.rssi_minutes * 60,
+              rssi=rssi if fresh else none, average_rssi=states(mean_id) | float(none),
+              baseline_ready=learned, source_running=running, connection_hours=limits.connection_hours, rssi_minutes=limits.rssi_minutes) }}
+  sensor:
+  - name: Zendure 2 network monitor
+    unique_id: zendure_2_network_monitor
+    icon: mdi:access-point-network
+    state: |-
+      {% if monitor.connection_alert and monitor.wifi_alert %}Connection and Wi-Fi
+      {% elif monitor.connection_alert %}Connection
+      {% elif monitor.wifi_alert %}Wi-Fi
+      {% elif not monitor.source_running %}No data
+      {% elif not monitor.baseline_ready %}Learning
+      {% else %}OK{% endif %}
+    attributes:
+      monitor: '{{ monitor }}'
+- triggers:
+  - trigger: time_pattern
+    minutes: /1
+  sensor:
+  - name: Zendure 3 error counter sample
+    unique_id: zendure_3_error_counter_sample
+    availability: |-
+      {{ is_number(states('sensor.zendure_proxy_device_3_errors_total')) }}
+    state: '{{ states(''sensor.zendure_proxy_device_3_errors_total'') }}'
+    attributes:
+      sampled_at: '{{ as_timestamp(now()) }}'
+  - name: Zendure 3 RSSI sample
+    unique_id: zendure_3_rssi_sample
+    device_class: signal_strength
+    unit_of_measurement: dBm
+    availability: |-
+      {% set e = 'sensor.zendure_3_wifi_rssi' %}
+      {{ is_number(states(e)) and -120 <= states(e) | float < 0 and as_timestamp(now()) - (state_attr(e, 'proxy_last_successful_get_at') | float(0)) < 300 }}
+    state: '{{ states(''sensor.zendure_3_wifi_rssi'') }}'
+    attributes:
+      sampled_at: '{{ as_timestamp(now()) }}'
+- triggers:
+  - trigger: time_pattern
+    minutes: /1
+    seconds: '15'
+  variables:
+    n: 3
+    limits: *id001
+    monitor: |-
+      {% set ts = as_timestamp(now()) %}
+      {% set p = state_attr('sensor.zendure_' ~ n ~ '_network_monitor', 'monitor') or {} %}
+      {% set continuous = ts - (p.get('checked_at', 0) | float(0)) <= limits.gap_seconds %}
+      {% set uptime = states.sensor.zendure_proxy_uptime %}
+      {% set running = uptime is defined and is_number(uptime.state) and ts - as_timestamp(uptime.last_updated, 0) < 180 %}
+      {% set errors_id = 'sensor.zendure_' ~ n ~ '_errors_last_hour' %}
+      {% set errors = states(errors_id) | float(0) %}
+      {% set connection_valid = running and is_number(states(errors_id)) and (state_attr(errors_id, 'age_coverage_ratio') | float(0)) >= 0.8 and (state_attr(errors_id, 'buffer_usage_ratio') | float(0)) >= 0.8 and states('sensor.zendure_' ~ n ~ '_health') in ['Healthy', 'Degraded', 'Dead'] %}
+      {% set bad = connection_valid and errors >= limits.errors_per_hour %}
+      {% set cs = p.get('connection_since', 0) | float(0) if continuous else 0 %}
+      {% set cr = p.get('connection_recovery_since', 0) | float(0) if continuous else 0 %}
+      {% if bad %}
+        {% set cs = cs or ts %}
+        {% set cr = 0 %}
+      {% elif connection_valid %}
+        {% set cr = (cr or ts) if cs else 0 %}
+        {% if cr and ts - cr >= limits.recovery_minutes * 60 %}{% set cs = 0 %}{% set cr = 0 %}{% endif %}
+      {% else %}
+        {% set cs = 0 %}{% set cr = 0 %}
+      {% endif %}
+      {% set rssi_id = 'sensor.zendure_' ~ n ~ '_wifi_rssi' %}
+      {% set raw = states(rssi_id) %}
+      {% set rssi = raw | float(0) %}
+      {% set fresh = running and is_number(raw) and -120 <= rssi < 0 and ts - (state_attr(rssi_id, 'proxy_last_successful_get_at') | float(0)) < 300 %}
+      {% set mean_id = 'sensor.zendure_' ~ n ~ '_rssi_average_24h' %}
+      {% set learned = is_number(states(mean_id)) and (state_attr(mean_id, 'age_coverage_ratio') | float(0)) >= limits.baseline_hours / 24 and (state_attr(mean_id, 'buffer_usage_ratio') | float(0)) >= limits.baseline_hours / 24 %}
+      {% set ws = p.get('wifi_since', 0) | float(0) if continuous else 0 %}
+      {% set ref = p.get('wifi_reference') if ws else none %}
+      {% if ref is none and learned %}{% set ref = states(mean_id) | float %}{% endif %}
+      {% set changed = fresh and ref is not none and (rssi - ref) | abs >= limits.rssi_delta_db %}
+      {% if changed %}
+        {% set ws = ws or ts %}
+      {% else %}
+        {% set ws = 0 %}{% set ref = none %}
+      {% endif %}
+      {{ dict(checked_at=ts, connection_since=cs, connection_recovery_since=cr,
+              connection_alert=bad and cs > 0 and ts - cs >= limits.connection_hours * 3600,
+              errors_last_hour=errors if connection_valid else none,
+              wifi_since=ws, wifi_reference=ref, wifi_alert=changed and ts - ws >= limits.rssi_minutes * 60,
+              rssi=rssi if fresh else none, average_rssi=states(mean_id) | float(none),
+              baseline_ready=learned, source_running=running, connection_hours=limits.connection_hours, rssi_minutes=limits.rssi_minutes) }}
+  sensor:
+  - name: Zendure 3 network monitor
+    unique_id: zendure_3_network_monitor
+    icon: mdi:access-point-network
+    state: |-
+      {% if monitor.connection_alert and monitor.wifi_alert %}Connection and Wi-Fi
+      {% elif monitor.connection_alert %}Connection
+      {% elif monitor.wifi_alert %}Wi-Fi
+      {% elif not monitor.source_running %}No data
+      {% elif not monitor.baseline_ready %}Learning
+      {% else %}OK{% endif %}
+    attributes:
+      monitor: '{{ monitor }}'
+automation:
+- id: zendure_network_incident_notification
+  alias: Zendure network incident notification
+  mode: single
+  description: Persistent timers; one notification per device per 24 hours. Change
+    the thresholds in the monitor variable.
+  triggers:
+  - trigger: time_pattern
+    minutes: /1
+    seconds: '30'
+  variables:
+    notify_service: notify.mobile_app_your_phone
+  actions:
+  - repeat:
+      for_each:
+      - 1
+      - 2
+      - 3
+      sequence:
+      - variables:
+          n: '{{ repeat.item }}'
+          m: '{{ state_attr(''sensor.zendure_'' ~ repeat.item ~ ''_network_monitor'',
+            ''monitor'') or {} }}'
+          last_notification: '{{ states(''input_number.zendure_'' ~ repeat.item ~
+            ''_network_last_notification'') | float(0) }}'
+      - if:
+        - condition: template
+          value_template: '{{ (m.get(''connection_alert'', false) or m.get(''wifi_alert'',
+            false)) and as_timestamp(now()) - last_notification | float(0) >= 86400
+            }}'
+        then:
+        - variables:
+            message: "Zendure {{ n }}: {% if m.connection_alert %}al meer dan {{ m.connection_hours\
+              \ }} uur veel verbindingsproblemen ({{ m.errors_last_hour | round(0)\
+              \ }} fouten in het laatste uur). {% endif %}{% if m.wifi_alert %}Wifi\
+              \ wijkt al minstens {{ m.rssi_minutes }} minuten af: {{ m.rssi }} dBm\
+              \ tegenover {{ m.wifi_reference | round(1) }} dBm vóór de afwijking.\
+              \ {% endif %}Controleer het access point, wifi-bereik en de Zendure. "
+        - action: input_number.set_value
+          target:
+            entity_id: '{{ ''input_number.zendure_'' ~ n ~ ''_network_last_notification''
+              }}'
+          data:
+            value: '{{ as_timestamp(now()) | int }}'
+        - action: persistent_notification.create
+          data:
+            notification_id: '{{ ''zendure_network_'' ~ n }}'
+            title: Zendure verbindingsprobleem
+            message: '{{ message }}'
+        - action: '{{ notify_service }}'
+          continue_on_error: true
+          data:
+            title: Zendure verbindingsprobleem
+            message: '{{ message }}'
+            data:
+              tag: '{{ ''zendure_network_'' ~ n }}'

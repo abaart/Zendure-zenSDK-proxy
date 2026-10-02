@@ -423,6 +423,7 @@ def build_combined_response(
         props[f"hyperTmp{s}"] = dp.get("hyperTmp", 2731)
         props[f"sn{s}"] = devs[i].sn
         props[f"ipAddress{s}"] = devs[i].ip
+        props[f"rssi{s}"] = dp.get("rssi")
         props[f"gridOffMode{s}"] = dp.get("gridOffMode", 2)
         props[f"chargeMaxLimit{s}"] = devs[i].charge_max_limit
         props[f"inverseMaxPower{s}"] = devs[i].inverse_max_power
@@ -451,6 +452,7 @@ def build_combined_response(
         props[f"hyperTmp{s}"] = 2731
         props[f"sn{s}"] = ""
         props[f"ipAddress{s}"] = ""
+        props[f"rssi{s}"] = None
         props[f"gridOffMode{s}"] = 2
 
     # ── Proxy metadata ─────────────────────────────────────────────────────────

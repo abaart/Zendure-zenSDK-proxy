@@ -9,9 +9,35 @@ views:
     card:
       type: markdown
       text_only: true
+      entity_id:
+      - sensor.zendure_1_network_monitor
+      - sensor.zendure_2_network_monitor
+      - sensor.zendure_3_network_monitor
       content: |-
         # Zendure proxy
         Vergelijk de batterijen en bekijk wat de proxy aanstuurt. **+ W = laden · − W = ontladen.** Tik op een waarde voor details.
+
+        {% set ns = namespace(alerts=[], learning=[]) %}
+        {% for n in range(1, 4) %}
+          {% set m = state_attr('sensor.zendure_' ~ n ~ '_network_monitor', 'monitor') or {} %}
+          {% set details = [] %}
+          {% if m.get('connection_alert', false) %}
+            {% set details = details + ['veel verbindingsfouten gedurende ' ~ (m.get('connection_hours', 24) | int) ~ ' uur; ' ~ (m.get('errors_last_hour', 0) | float(0) | round(0) | int) ~ ' fouten in het laatste uur'] %}
+          {% endif %}
+          {% if m.get('wifi_alert', false) %}
+            {% set details = details + ['wifi wijkt al ' ~ (m.get('rssi_minutes', 10) | int) ~ ' minuten af: ' ~ (m.get('rssi', 0) | float(0) | round(1)) ~ ' dBm tegenover ' ~ (m.get('wifi_reference', 0) | float(0) | round(1)) ~ ' dBm vóór de afwijking'] %}
+          {% endif %}
+          {% if details %}
+            {% set ns.alerts = ns.alerts + ['<li><strong>Zendure ' ~ n ~ '</strong>: ' ~ (details | join('. ')) ~ '.</li>'] %}
+          {% elif m and not m.get('baseline_ready', false) and m.get('source_running', false) %}
+            {% set ns.learning = ns.learning + ['Zendure ' ~ n] %}
+          {% endif %}
+        {% endfor %}
+        {% if ns.alerts %}
+        <ha-alert alert-type="warning" title="Controleer de Zendure-verbinding"><ul>{{ ns.alerts | join('') }}</ul>Controleer het access point, wifi-bereik en de Zendure.<br><a href="/zendure-proxy/metrics">Bekijk diagnostiek</a> · <a href="/zendure-proxy/grafieken">Vergelijk de grafieken</a></ha-alert>
+        {% elif ns.learning %}
+        <ha-alert alert-type="info" title="Wifi-bewaking leert het gebruikelijke signaal">De wifi-referentie wordt opgebouwd voor {{ ns.learning | join(', ') }}. Afwijkingen worden bewaakt zodra er voldoende meetgegevens zijn; bij de huidige instellingen duurt dat minstens zes uur.</ha-alert>
+        {% endif %}
   sections:
   - type: grid
     cards:

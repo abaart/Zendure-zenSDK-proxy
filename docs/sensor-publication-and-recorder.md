@@ -147,3 +147,19 @@ Sources:
 - [HA 2026.9.1 REST schema](https://github.com/home-assistant/core/blob/2026.9.1/homeassistant/components/rest/schema.py)
 - [AppDaemon MQTT API](https://appdaemon.readthedocs.io/en/latest/MQTT_API_REFERENCE.html)
 - [Recorder filtering issue #155498](https://github.com/home-assistant/core/issues/155498)
+
+
+### Network incident monitoring
+
+`sensor.zendure_N_wifi_rssi` publishes signal strength in dBm every 60 seconds,
+including unchanged readings. The source timestamp remains the last successful
+GET time, so the HA watchdog can reject cached readings older than five minutes.
+Invalid and excluded-slot RSSI readings are unavailable. The combined report
+also exposes `properties.rssi_N` while preserving the aggregate `properties.rssi`.
+
+The optional `examples/zendure_network_watchdog.yaml` package keeps a rolling
+hour of request-error deltas and a 24-hour time-weighted RSSI reference. Minute
+sample attributes provide time coverage when source values stay constant. Keep
+sample sensors recorded to restore Statistics buffers on HA startup. The package
+uses stored incident timestamps and a shared 24-hour notification limit per
+device; observation gaps longer than five minutes reset the incident timers.

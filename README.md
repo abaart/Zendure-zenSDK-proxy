@@ -614,31 +614,54 @@ data:
 The old URLs on `8120` remain available for installations where the caller can
 reach the AppDaemon container port directly.
 
-## Degraded pool notification
+## Connection and Wi-Fi incident notifications
 
-Create a Home Assistant automation that sends a push message when
-`sensor.proxy_zendure_pool_healthy` changes to `Degraded`. The message gives a
-user time to check the physical Zendure, the IP address, Wi-Fi, or the power
-supply before the proxy treats the Zendure as `Dead`.
+Copy [`examples/zendure_network_watchdog.yaml`](examples/zendure_network_watchdog.yaml)
+to `/config/packages/zendure_network_watchdog.yaml`. Home Assistant must load
+packages with `packages: !include_dir_named packages` under `homeassistant:`.
+Set the automation variable `notify_service` to your phone action, for example
+`notify.mobile_app_my_phone`. Each alert also creates a persistent notification
+in Home Assistant. Install the proxy Python files containing the per-device
+RSSI sensors and restart AppDaemon with `production_mode: true`.
 
-Example:
+The package monitors Zendure 1, 2 and 3 separately. Its initial thresholds are:
 
-```yaml
-alias: Zendure pool degraded notification
-mode: single
-trigger:
-  - platform: state
-    entity_id: sensor.proxy_zendure_pool_healthy
-    to: "Degraded"
-    for: "00:01:00"
-action:
-  - service: notify.mobile_app_your_phone
-    data:
-      title: "Zendure proxy degraded"
-      message: >
-        One or more Zendures are not responding correctly. Check
-        sensor.zendure_1_health through sensor.zendure_10_health in Home Assistant.
-```
+- At least 100 device request failures in the rolling hour for a 24-hour
+  incident. An hour below the threshold ends the incident; shorter recoveries
+  preserve its start time. Alerts are sent while the error threshold is met.
+- A Wi-Fi RSSI change of at least 10 dB, stronger or weaker, for ten minutes,
+  compared with the time-weighted average of the preceding 24 hours. The package
+  first requires six hours of reference coverage. The average freezes when an
+  RSSI deviation starts, so the deviation cannot move its own reference.
+- At most one notification per device in 24 hours, shared by both alert causes
+  and by subsequent incidents. Continued incidents receive a daily reminder.
+
+Edit the `limits` mapping in the first network monitor block to change the
+thresholds. YAML aliases reuse the same mapping for the other two devices.
+Duplicate the sample, statistics, monitor and `input_number` entries and extend
+`repeat.for_each` when adding Zendure 4 or higher.
+
+The error window uses `sum_differences_nonnegative` on the per-device error
+counter, including counter resets. The RSSI source is
+`sensor.zendure_N_wifi_rssi`, with unit `dBm`. Missing values, zero values,
+excluded devices and measurements older than five minutes cannot create Wi-Fi
+alerts. RSSI publication repeats once per minute with the timestamp of the last
+successful device GET; replaying a cached report preserves that timestamp.
+No additional device requests are made for RSSI monitoring.
+
+Trigger-based monitor attributes and `input_number` notification timestamps survive
+HA restarts. Observation gaps over five minutes reset incident durations because
+the package cannot establish what happened during the gap. Keep the sample
+sensors in Recorder so the Statistics integration can restore its buffers after
+a restart. The package adds minute samples for time coverage and does not change
+Recorder retention or exclusions. Allow roughly an hour to build the initial
+error window and six hours to build the initial RSSI reference. Reload
+`input_number`, `template`, `statistics` and `automation` after installation;
+restart Home Assistant if a reload action is unavailable.
+
+Disable an existing short `Degraded` notification automation when enabling the
+incident package. Its state transitions would otherwise still send separate
+notifications without the package's daily limit.
 
 ## Sensors and MQTT discovery
 
@@ -844,6 +867,10 @@ dashboard uses native Home Assistant cards and four views:
 
 - **Overzicht**: battery charge, commanded and measured power, connection status,
   activity, and charge/discharge limits per Zendure, with two-hour power graphs.
+  The header shows a warning banner for incidents from the optional network
+  watchdog package, including error counts or current/reference RSSI and links
+  to diagnostics and graphs. During RSSI training, an information banner shows
+  which devices are building their reference; normal operation hides the banner.
 - **Grafieken**: 24-hour power, charge, battery temperature, and connection history.
 - **Diagnostiek**: error rates, errors today, queue depths, queue processing,
   relay switches, and proxy version. Counter graphs show increases per interval.

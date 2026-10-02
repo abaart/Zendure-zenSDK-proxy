@@ -16,6 +16,9 @@ class PublicationPolicy:
 
 
 def publication_policy(entity_id: str) -> PublicationPolicy:
+    if re.fullmatch(r"sensor.zendure_\d+_wifi_rssi", entity_id):
+        # A fresh timestamp lets HA reject cached Wi-Fi readings during outages.
+        return PublicationPolicy(60, heartbeat=60)
     if entity_id == "sensor.zendure_proxy_versie" or re.fullmatch(
         r"sensor.zendure_\d+_(serienummer|ip_adres)", entity_id
     ):

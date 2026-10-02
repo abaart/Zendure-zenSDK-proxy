@@ -76,6 +76,20 @@ def build_proxy_ha_sensors(response: dict, battery_order_raw: Any = None) -> Sen
             ),
         )
         slot_unavailable = idx in unavailable_slots
+        rssi = props.get(f"rssi_{idx}")
+        try:
+            valid_rssi = -120 <= float(rssi) < 0
+        except (ValueError, TypeError):
+            valid_rssi = False
+        add(
+            f"sensor.zendure_{idx}_wifi_rssi",
+            rssi if valid_rssi and not slot_unavailable and idx <= configured_count else "unavailable",
+            f"Zendure {idx} Wi-Fi RSSI",
+            device_class="signal_strength",
+            unit_of_measurement="dBm",
+            state_class="measurement",
+            icon="mdi:wifi",
+        )
         add(
             f"sensor.zendure_{idx}_laadpercentage",
             "unavailable" if slot_unavailable else props.get(f"electricLevel_{idx}", 0),
