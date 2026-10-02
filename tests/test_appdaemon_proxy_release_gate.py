@@ -2482,7 +2482,7 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return result("mqtt-listener")
 
             mqtt = types.SimpleNamespace(listen_event=listen_event)
-            proxy._get_mqtt_api = lambda: mqtt
+            proxy.get_plugin_api = lambda name: result(mqtt)
             proxy.register_endpoint = lambda *_args: result("endpoint")
             proxy.register_route = lambda *_args: result("route")
             proxy.run_every = run_every
@@ -2496,6 +2496,19 @@ class SensorPublicationRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn((proxy._refresh_proxy_ha_sensors, 300), timers)
             self.assertEqual(proxy._mqtt_connection_handle, "mqtt-listener")
             self.assertEqual(listeners[0][1:], ("MQTT_MESSAGE", {"state": "Connected", "topic": None}))
+
+    async def test_get_mqtt_api_resolves_failed_task_and_disabled_discovery(self):
+        proxy = self.make_proxy()
+
+        async def missing_plugin():
+            raise RuntimeError("MQTT unavailable")
+
+        proxy.log = lambda *_args, **_kwargs: None
+        proxy.get_plugin_api = lambda name: asyncio.create_task(missing_plugin())
+        self.assertIsNone(await proxy._get_mqtt_api())
+        proxy._cfg.proxy_ha_sensors_mqtt_discovery_enabled = False
+        proxy.get_plugin_api = lambda name: self.fail("Disabled discovery must not load MQTT")
+        self.assertIsNone(await proxy._get_mqtt_api())
 
     def test_pack_source_mapping_preserves_rest_payload_and_healthy_pack_availability(self):
         results = [_device(1, "SN1"), _device(2, "SN2")]

@@ -60,7 +60,7 @@ class ZendureProxy(hass.Hass):
     async def initialize(self) -> None:
         self._cfg: Config = load_config(self.args)
         self._file_logger: Optional[ProxyFileLogger] = self._create_file_logger()
-        self._mqtt_api = self._get_mqtt_api()
+        self._mqtt_api = await self._resolve_appdaemon_result(self._get_mqtt_api())
         self._mqtt_sensor_error_logged = False
         self._metrics = MetricsRegistry(len(self._cfg.device_ips))
         self._proxy_ha_sensor_owned_entities: set[str] = set()
@@ -302,11 +302,11 @@ class ZendureProxy(hass.Hass):
         else:
             self.log(line, level="DEBUG")
 
-    def _get_mqtt_api(self):
+    async def _get_mqtt_api(self):
         if not self._cfg.proxy_ha_sensors_mqtt_discovery_enabled:
             return None
         try:
-            return self.get_plugin_api("MQTT")
+            return await self._resolve_appdaemon_result(self.get_plugin_api("MQTT"))
         except Exception as exc:
             self.log(
                 "Could not start MQTT discovery for Zendure proxy sensors; "

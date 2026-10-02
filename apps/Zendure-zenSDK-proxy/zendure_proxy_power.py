@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from zendure_proxy_state import ProxyState
 
-PROXY_VERSION = "v0.1.28"
+PROXY_VERSION = "v0.1.29"
 SOC_LOCKSTEP_LOW_THRESHOLD = 10.0
 SOC_LOCKSTEP_HIGH_THRESHOLD = 90.0
 
