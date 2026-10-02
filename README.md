@@ -840,11 +840,22 @@ example `.dash` file embeds `/app/zendure_proxy_metrics` and
 
 For Home Assistant Lovelace, use
 `apps/Zendure-zenSDK-proxy/dashboard.yaml` as a dashboard example. The Lovelace
-dashboard shows proxy power commands, realized Zendure power, health sensors,
-incoming error rates, queue depths, per-device error rates, SoC sensors, mode
-sensors, relay state sensors, and proxy version sensors. The Lovelace dashboard
-uses conditional rows for Zendure 3 sensors where the legacy proxy serial number
-sensor reports `3x Zendure via PROXY`.
+dashboard uses native Home Assistant cards and four views:
+
+- **Overzicht**: battery charge, commanded and measured power, connection status,
+  activity, and charge/discharge limits per Zendure, with two-hour power graphs.
+- **Grafieken**: 24-hour power, charge, battery temperature, and connection history.
+- **Diagnostiek**: error rates, errors today, queue depths, queue processing,
+  relay switches, and proxy version. Counter graphs show increases per interval.
+- **Apparaten**: serial numbers, inverter temperature, relay state, storage mode,
+  calibration, and off-grid mode.
+
+Positive power means charging; negative power means discharging. Tap a sensor
+to open its details. Sections adapt to the available screen width. Zendure 3
+cards appear when `sensor.zendure_2400_ac_serienummer` reports
+`3x Zendure via PROXY`. The overview keeps path `0`; diagnostics keeps path
+`metrics` for existing links. Back up the current dashboard before importing
+the example, and preserve installation-specific links or additional views.
 
 The metrics dashboard shows:
 

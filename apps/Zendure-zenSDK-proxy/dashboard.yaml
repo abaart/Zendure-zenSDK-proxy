@@ -1,206 +1,624 @@
 views:
-  - type: sections
-    sections:
-      - type: grid
-        cards:
-          - chart_type: line
-            period: 5minute
-            type: statistics-graph
-            entities:
-              - sensor.vermogensopdracht_zendure_1
-              - sensor.zendure_1_vermogen_aansturing
-              - sensor.vermogensopdracht_zendure_2
-              - sensor.zendure_2_vermogen_aansturing
-              - sensor.vermogensopdracht_zendure_3
-              - sensor.zendure_3_vermogen_aansturing
-            stat_types:
-              - mean
-            days_to_show: 0.1
-            energy_date_selection: false
-            expand_legend: false
-            logarithmic_scale: false
-            title: Aansturing en realisatie zendures
-          - type: heading
-            heading: New section
-          - type: entities
-            title: Zendure Proxy Sensoren
-            entities:
-              - entity: sensor.vermogensopdracht
-              - entity: sensor.vermogensopdracht_zendure_1
-              - entity: sensor.vermogensopdracht_zendure_2
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.vermogensopdracht_zendure_3
-              - entity: sensor.zendure_1_vermogen_aansturing
-              - entity: sensor.zendure_2_vermogen_aansturing
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_vermogen_aansturing
-              - entity: sensor.zendure_actief_device
-                name: Actief Device
-              - entity: sensor.zendure_1_laadpercentage
-              - entity: sensor.zendure_2_laadpercentage
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_laadpercentage
-              - entity: sensor.zendure_1_soc_limiet_status
-              - entity: sensor.zendure_2_soc_limiet_status
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_soc_limiet_status
-              - entity: sensor.zendure_1_opslagmodus
-              - entity: sensor.zendure_2_opslagmodus
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_opslagmodus
-              - entity: sensor.zendure_1_kalibratie_bezig
-              - entity: sensor.zendure_2_kalibratie_bezig
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_kalibratie_bezig
-              - entity: sensor.zendure_1_omvormer_temperatuur
-              - entity: sensor.zendure_2_omvormer_temperatuur
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_omvormer_temperatuur
-              - entity: sensor.zendure_1_offgrid_modus
-              - entity: sensor.zendure_2_offgrid_modus
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_offgrid_modus
-              - entity: sensor.dual_mode_demper_status
-              - entity: sensor.zendure_1_serienummer
-              - entity: sensor.zendure_2_serienummer
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_serienummer
-              - entity: sensor.zendure_proxy_versie
-                name: Proxy Versie
-      - type: grid
-        cards:
-          - type: heading
-            heading: New section
-          - type: entities
-            title: Zendure Proxy Sensoren
-            entities:
-              - type: section
-                label: Proxy overzicht
-              - entity: sensor.proxy_zendure_pool_healthy
-                name: Zendure pool gezondheid
-              - entity: sensor.zendure_1_health
-                name: Zendure 1 Gezondheid
-              - entity: sensor.zendure_2_health
-                name: Zendure 2 Gezondheid
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_health
-                  name: Zendure 3 Gezondheid
-              - entity: sensor.zendure_proxy_incoming_get_error_rate
-                name: Inkomende GET foutpercentage
-              - entity: sensor.zendure_proxy_incoming_post_error_rate
-                name: Inkomende POST foutpercentage
-              - entity: sensor.zendure_proxy_queue_get_depth
-                name: Inkomende GET wachtrij
-              - entity: sensor.zendure_proxy_queue_post_depth
-                name: Inkomende POST wachtrij
-              - entity: sensor.zendure_proxy_device_1_error_rate
-                name: Zendure 1 foutpercentage
-              - entity: sensor.zendure_proxy_device_2_error_rate
-                name: Zendure 2 foutpercentage
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_proxy_device_3_error_rate
-                  name: Zendure 3 foutpercentage
-              - type: divider
-              - type: section
-                label: Proxy status
-              - entity: sensor.vermogensopdracht
-              - entity: sensor.vermogensopdracht_zendure_1
-              - entity: sensor.vermogensopdracht_zendure_2
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.vermogensopdracht_zendure_3
-              - entity: sensor.zendure_1_vermogen_aansturing
-              - entity: sensor.zendure_2_vermogen_aansturing
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_vermogen_aansturing
-              - entity: sensor.zendure_actief_device
-                name: Actief Device
-              - entity: sensor.zendure_1_laadpercentage
-              - entity: sensor.zendure_2_laadpercentage
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_laadpercentage
-              - entity: sensor.zendure_1_modus
-              - entity: sensor.zendure_2_modus
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_modus
-              - entity: sensor.zendure_1_relais_stand
-              - entity: sensor.zendure_2_relais_stand
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_relais_stand
-              - entity: sensor.zendure_1_soc_limiet_status
-              - entity: sensor.zendure_2_soc_limiet_status
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
-                row:
-                  entity: sensor.zendure_3_soc_limiet_status
-              - entity: sensor.zendure_1_opslagmodus
-              - entity: sensor.zendure_2_opslagmodus
-              - type: conditional
-                conditions:
-                  - entity: sensor.zendure_2400_ac_serienummer
-                    state: 3x Zendure via PROXY
+- title: Overzicht
+  path: '0'
+  type: sections
+  max_columns: 3
+  header:
+    layout: start
+    badges_position: bottom
+    card:
+      type: markdown
+      text_only: true
+      content: |-
+        # Zendure proxy
+        Vergelijk de batterijen en bekijk wat de proxy aanstuurt. **+ W = laden · − W = ontladen.** Tik op een waarde voor details.
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 1
+      heading_style: title
+      icon: mdi:battery
+    - type: gauge
+      entity: sensor.zendure_1_laadpercentage
+      name: Batterijlading
+      min: 0
+      max: 100
+      needle: true
+    - type: tile
+      entity: sensor.vermogensopdracht_zendure_1
+      name: Opdracht
+      icon: mdi:target
+      color: blue
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      grid_options:
+        columns: 6
+        rows: 1
+    - type: tile
+      entity: sensor.zendure_1_vermogen_aansturing
+      name: Gemeten
+      icon: mdi:flash
+      color: teal
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      grid_options:
+        columns: 6
+        rows: 1
+    - type: entities
+      title: Status
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_1_health
+        name: Verbinding
+      - entity: sensor.zendure_1_modus
+        name: Activiteit
+      - entity: sensor.zendure_1_soc_limiet_status
+        name: Laad-/ontlaadlimiet
+    - type: history-graph
+      title: Vermogen · afgelopen 2 uur
+      entities:
+      - entity: sensor.vermogensopdracht_zendure_1
+        name: Opdracht
+      - entity: sensor.zendure_1_vermogen_aansturing
+        name: Gemeten
+      hours_to_show: 2
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 2
+      heading_style: title
+      icon: mdi:battery
+    - type: gauge
+      entity: sensor.zendure_2_laadpercentage
+      name: Batterijlading
+      min: 0
+      max: 100
+      needle: true
+    - type: tile
+      entity: sensor.vermogensopdracht_zendure_2
+      name: Opdracht
+      icon: mdi:target
+      color: blue
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      grid_options:
+        columns: 6
+        rows: 1
+    - type: tile
+      entity: sensor.zendure_2_vermogen_aansturing
+      name: Gemeten
+      icon: mdi:flash
+      color: teal
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      grid_options:
+        columns: 6
+        rows: 1
+    - type: entities
+      title: Status
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_2_health
+        name: Verbinding
+      - entity: sensor.zendure_2_modus
+        name: Activiteit
+      - entity: sensor.zendure_2_soc_limiet_status
+        name: Laad-/ontlaadlimiet
+    - type: history-graph
+      title: Vermogen · afgelopen 2 uur
+      entities:
+      - entity: sensor.vermogensopdracht_zendure_2
+        name: Opdracht
+      - entity: sensor.zendure_2_vermogen_aansturing
+        name: Gemeten
+      hours_to_show: 2
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 3
+      heading_style: title
+      icon: mdi:battery
+    - type: gauge
+      entity: sensor.zendure_3_laadpercentage
+      name: Batterijlading
+      min: 0
+      max: 100
+      needle: true
+    - type: tile
+      entity: sensor.vermogensopdracht_zendure_3
+      name: Opdracht
+      icon: mdi:target
+      color: blue
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      grid_options:
+        columns: 6
+        rows: 1
+    - type: tile
+      entity: sensor.zendure_3_vermogen_aansturing
+      name: Gemeten
+      icon: mdi:flash
+      color: teal
+      tap_action:
+        action: more-info
+      icon_tap_action:
+        action: more-info
+      grid_options:
+        columns: 6
+        rows: 1
+    - type: entities
+      title: Status
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_3_health
+        name: Verbinding
+      - entity: sensor.zendure_3_modus
+        name: Activiteit
+      - entity: sensor.zendure_3_soc_limiet_status
+        name: Laad-/ontlaadlimiet
+    - type: history-graph
+      title: Vermogen · afgelopen 2 uur
+      entities:
+      - entity: sensor.vermogensopdracht_zendure_3
+        name: Opdracht
+      - entity: sensor.zendure_3_vermogen_aansturing
+        name: Gemeten
+      hours_to_show: 2
+    visibility:
+    - condition: state
+      entity: sensor.zendure_2400_ac_serienummer
+      state: 3x Zendure via PROXY
+  badges:
+  - type: entity
+    entity: sensor.proxy_zendure_pool_healthy
+    name: Verbinding
+    show_name: true
+    show_state: true
+    show_icon: true
+    tap_action:
+      action: more-info
+  - type: entity
+    entity: sensor.vermogensopdracht
+    name: Totale opdracht
+    show_name: true
+    show_state: true
+    show_icon: true
+    tap_action:
+      action: more-info
+  - type: entity
+    entity: sensor.zendure_actief_device
+    name: Actieve batterijen
+    show_name: true
+    show_state: true
+    show_icon: true
+    tap_action:
+      action: more-info
+- title: Diagnostiek
+  path: metrics
+  type: sections
+  max_columns: 3
+  header:
+    layout: start
+    badges_position: bottom
+    card:
+      type: markdown
+      text_only: true
+      content: |-
+        # Diagnostiek
+        Bekijk fouten, wachtrijen en relaisschakelingen. De tellergrafieken tonen de toename per uur of dag; dagelijkse foutentellingen starten om middernacht.
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Verzoeken en wachtrijen
+      heading_style: title
+      icon: mdi:swap-horizontal
+    - type: entities
+      title: Fouten en wachtrijen
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_proxy_incoming_get_error_rate
+        name: Leesverzoeken · fouten
+      - entity: sensor.zendure_proxy_incoming_post_error_rate
+        name: Schrijfverzoeken · fouten
+      - entity: sensor.zendure_proxy_queue_get_depth
+        name: Wachtende leesverzoeken
+      - entity: sensor.zendure_proxy_queue_post_depth
+        name: Wachtende schrijfverzoeken
+    - type: statistics-graph
+      title: Wachtrijverwerking · 24 uur
+      chart_type: line
+      period: hour
+      days_to_show: 1
+      stat_types:
+      - change
+      entities:
+      - entity: sensor.zendure_proxy_queue_cleanup_total
+        name: Opgeruimd
+      - entity: sensor.zendure_proxy_queue_get_coalesced_total
+        name: Lezen samengevoegd
+      - entity: sensor.zendure_proxy_queue_post_deduplicated_total
+        name: Dubbele schrijfopdrachten
+      hide_legend: false
+  - type: grid
+    cards:
+    - type: heading
+      heading: Fouten per batterij
+      heading_style: title
+      icon: mdi:alert-circle-outline
+    - type: entities
+      title: Foutpercentage
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_proxy_device_1_error_rate
+        name: Zendure 1
+      - entity: sensor.zendure_proxy_device_2_error_rate
+        name: Zendure 2
+      - type: conditional
+        conditions:
+        - entity: sensor.zendure_2400_ac_serienummer
+          state: 3x Zendure via PROXY
+        row:
+          entity: sensor.zendure_proxy_device_3_error_rate
+          name: Zendure 3
+    - type: statistic
+      entity: sensor.zendure_proxy_device_1_errors_total
+      period:
+        calendar:
+          period: day
+      stat_type: change
+      name: Zendure 1 · fouten vandaag
+      unit: fouten
+    - type: statistic
+      entity: sensor.zendure_proxy_device_2_errors_total
+      period:
+        calendar:
+          period: day
+      stat_type: change
+      name: Zendure 2 · fouten vandaag
+      unit: fouten
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state: 3x Zendure via PROXY
+      card:
+        type: statistic
+        entity: sensor.zendure_proxy_device_3_errors_total
+        period:
+          calendar:
+            period: day
+        stat_type: change
+        name: Zendure 3 · fouten vandaag
+        unit: fouten
+  - type: grid
+    cards:
+    - type: heading
+      heading: Relais en proxy
+      heading_style: title
+      icon: mdi:electric-switch
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state_not: 3x Zendure via PROXY
+      card:
+        type: statistics-graph
+        title: Relaisschakelingen · 30 dagen
+        chart_type: line
+        period: day
+        days_to_show: 30
+        stat_types:
+        - change
+        entities:
+        - entity: sensor.zendure_proxy_device_1_relay_switches_total
+          name: Zendure 1
+        - entity: sensor.zendure_proxy_device_2_relay_switches_total
+          name: Zendure 2
+        hide_legend: false
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state: 3x Zendure via PROXY
+      card:
+        type: statistics-graph
+        title: Relaisschakelingen · 30 dagen
+        chart_type: line
+        period: day
+        days_to_show: 30
+        stat_types:
+        - change
+        entities:
+        - entity: sensor.zendure_proxy_device_1_relay_switches_total
+          name: Zendure 1
+        - entity: sensor.zendure_proxy_device_2_relay_switches_total
+          name: Zendure 2
+        - entity: sensor.zendure_proxy_device_3_relay_switches_total
+          name: Zendure 3
+        hide_legend: false
+    - type: entities
+      title: Proxygegevens
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_proxy_versie
+        name: Versie
+      - entity: sensor.dual_mode_demper_status
+        name: Dual Mode-demper
+- title: Grafieken
+  path: grafieken
+  type: sections
+  max_columns: 3
+  header:
+    layout: start
+    badges_position: bottom
+    card:
+      type: markdown
+      text_only: true
+      content: |-
+        # Grafieken
+        Vergelijk opdracht, gemeten vermogen en batterijgegevens over de afgelopen 24 uur. Vermogen en lading tonen gemiddelden per 5 minuten.
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 1
+      heading_style: title
+      icon: mdi:chart-line
+    - type: statistics-graph
+      title: Opdracht en gemeten · 24 uur
+      chart_type: line
+      period: 5minute
+      days_to_show: 1
+      stat_types:
+      - mean
+      entities:
+      - entity: sensor.vermogensopdracht_zendure_1
+        name: Opdracht
+      - entity: sensor.zendure_1_vermogen_aansturing
+        name: Gemeten
+      hide_legend: false
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 2
+      heading_style: title
+      icon: mdi:chart-line
+    - type: statistics-graph
+      title: Opdracht en gemeten · 24 uur
+      chart_type: line
+      period: 5minute
+      days_to_show: 1
+      stat_types:
+      - mean
+      entities:
+      - entity: sensor.vermogensopdracht_zendure_2
+        name: Opdracht
+      - entity: sensor.zendure_2_vermogen_aansturing
+        name: Gemeten
+      hide_legend: false
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 3
+      heading_style: title
+      icon: mdi:chart-line
+    - type: statistics-graph
+      title: Opdracht en gemeten · 24 uur
+      chart_type: line
+      period: 5minute
+      days_to_show: 1
+      stat_types:
+      - mean
+      entities:
+      - entity: sensor.vermogensopdracht_zendure_3
+        name: Opdracht
+      - entity: sensor.zendure_3_vermogen_aansturing
+        name: Gemeten
+      hide_legend: false
+    visibility:
+    - condition: state
+      entity: sensor.zendure_2400_ac_serienummer
+      state: 3x Zendure via PROXY
+  - type: grid
+    cards:
+    - type: heading
+      heading: Batterijlading
+      heading_style: title
+      icon: mdi:battery-clock
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state_not: 3x Zendure via PROXY
+      card:
+        type: statistics-graph
+        title: Lading · 24 uur
+        chart_type: line
+        period: 5minute
+        days_to_show: 1
+        stat_types:
+        - mean
+        entities:
+        - entity: sensor.zendure_1_laadpercentage
+          name: Zendure 1
+        - entity: sensor.zendure_2_laadpercentage
+          name: Zendure 2
+        hide_legend: false
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state: 3x Zendure via PROXY
+      card:
+        type: statistics-graph
+        title: Lading · 24 uur
+        chart_type: line
+        period: 5minute
+        days_to_show: 1
+        stat_types:
+        - mean
+        entities:
+        - entity: sensor.zendure_1_laadpercentage
+          name: Zendure 1
+        - entity: sensor.zendure_2_laadpercentage
+          name: Zendure 2
+        - entity: sensor.zendure_3_laadpercentage
+          name: Zendure 3
+        hide_legend: false
+  - type: grid
+    cards:
+    - type: heading
+      heading: Temperatuur
+      heading_style: title
+      icon: mdi:thermometer
+    - type: statistics-graph
+      title: Batterijtemperatuur · 24 uur
+      chart_type: line
+      period: hour
+      days_to_show: 1
+      stat_types:
+      - mean
+      entities:
+      - entity: sensor.zendure_2400_ac_batterij_1_temperatuur
+        name: Batterij 1
+      - entity: sensor.zendure_2400_ac_batterij_2_temperatuur
+        name: Batterij 2
+      - entity: sensor.zendure_2400_ac_batterij_3_temperatuur
+        name: Batterij 3
+      hide_legend: false
+  - type: grid
+    cards:
+    - type: heading
+      heading: Bereikbaarheid
+      heading_style: title
+      icon: mdi:lan-connect
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state_not: 3x Zendure via PROXY
+      card:
+        type: history-graph
+        title: Verbinding · 24 uur
+        entities:
+        - entity: sensor.proxy_zendure_pool_healthy
+          name: Proxy
+        - entity: sensor.zendure_1_health
+          name: Zendure 1
+        - entity: sensor.zendure_2_health
+          name: Zendure 2
+        hours_to_show: 24
+    - type: conditional
+      conditions:
+      - condition: state
+        entity: sensor.zendure_2400_ac_serienummer
+        state: 3x Zendure via PROXY
+      card:
+        type: history-graph
+        title: Verbinding · 24 uur
+        entities:
+        - entity: sensor.proxy_zendure_pool_healthy
+          name: Proxy
+        - entity: sensor.zendure_1_health
+          name: Zendure 1
+        - entity: sensor.zendure_2_health
+          name: Zendure 2
+        - entity: sensor.zendure_3_health
+          name: Zendure 3
+        hours_to_show: 24
+- title: Apparaten
+  path: apparaten
+  type: sections
+  max_columns: 3
+  header:
+    layout: start
+    badges_position: bottom
+    card:
+      type: markdown
+      text_only: true
+      content: |-
+        # Apparaten
+        Bekijk temperatuur, relaisstand en technische gegevens per Zendure.
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 1
+      heading_style: title
+      icon: mdi:information-outline
+    - type: entities
+      title: Apparaatgegevens
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_1_serienummer
+        name: Serienummer
+      - entity: sensor.zendure_1_omvormer_temperatuur
+        name: Omvormertemperatuur
+      - entity: sensor.zendure_1_relais_stand
+        name: Relaisstand
+      - entity: sensor.zendure_1_opslagmodus
+        name: Opslagmodus
+      - entity: sensor.zendure_1_kalibratie_bezig
+        name: Kalibratie bezig
+      - entity: sensor.zendure_1_offgrid_modus
+        name: Offgrid-modus
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 2
+      heading_style: title
+      icon: mdi:information-outline
+    - type: entities
+      title: Apparaatgegevens
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_2_serienummer
+        name: Serienummer
+      - entity: sensor.zendure_2_omvormer_temperatuur
+        name: Omvormertemperatuur
+      - entity: sensor.zendure_2_relais_stand
+        name: Relaisstand
+      - entity: sensor.zendure_2_opslagmodus
+        name: Opslagmodus
+      - entity: sensor.zendure_2_kalibratie_bezig
+        name: Kalibratie bezig
+      - entity: sensor.zendure_2_offgrid_modus
+        name: Offgrid-modus
+  - type: grid
+    cards:
+    - type: heading
+      heading: Zendure 3
+      heading_style: title
+      icon: mdi:information-outline
+    - type: entities
+      title: Apparaatgegevens
+      show_header_toggle: false
+      entities:
+      - entity: sensor.zendure_3_serienummer
+        name: Serienummer
+      - entity: sensor.zendure_3_omvormer_temperatuur
+        name: Omvormertemperatuur
+      - entity: sensor.zendure_3_relais_stand
+        name: Relaisstand
+      - entity: sensor.zendure_3_opslagmodus
+        name: Opslagmodus
+      - entity: sensor.zendure_3_kalibratie_bezig
+        name: Kalibratie bezig
+      - entity: sensor.zendure_3_offgrid_modus
+        name: Offgrid-modus
+    visibility:
+    - condition: state
+      entity: sensor.zendure_2400_ac_serienummer
+      state: 3x Zendure via PROXY
